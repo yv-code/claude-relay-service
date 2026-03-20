@@ -2089,11 +2089,72 @@ const requestSizeLimit = (req, res, next) => {
   return next()
 }
 
+// 🔑 Agent Token 验证中间件
+const authenticateAgentToken = async (req, res, next) => {
+  const startTime = Date.now()
+
+  try {
+    const token =
+      req.headers['authorization']?.replace(/^Bearer\s+/i, '') || req.headers['x-agent-token']
+
+    if (!token) {
+      return res.status(401).json({
+        error: 'Missing agent token',
+        message: 'Please provide an agent token in the Authorization or x-agent-token header'
+      })
+    }
+
+    if (typeof token !== 'string' || token.length < 10 || token.length > 256) {
+      return res.status(401).json({
+        error: 'Invalid token format',
+        message: 'Agent token format is invalid'
+      })
+    }
+
+    const agentTokenService = require('../services/agentTokenService')
+    const validation = await agentTokenService.validateToken(token)
+
+    if (!validation.valid) {
+      const clientIP = req.ip || req.connection?.remoteAddress || 'unknown'
+      logger.security(`Invalid agent token attempt from ${clientIP}: ${validation.error}`)
+      return res.status(401).json({
+        error: 'Invalid agent token',
+        message: validation.error
+      })
+    }
+
+    req.agentToken = {
+      id: validation.tokenData.id,
+      name: validation.tokenData.name
+    }
+
+    const authDuration = Date.now() - startTime
+    logger.api(
+      `🔑 Agent token authenticated: ${validation.tokenData.name} (${validation.tokenData.id}) in ${authDuration}ms`
+    )
+
+    return next()
+  } catch (error) {
+    const authDuration = Date.now() - startTime
+    logger.error(`❌ Agent token authentication error (${authDuration}ms):`, {
+      error: error.message,
+      ip: req.ip,
+      url: req.originalUrl
+    })
+
+    return res.status(500).json({
+      error: 'Authentication error',
+      message: 'Internal server error during authentication'
+    })
+  }
+}
+
 module.exports = {
   authenticateApiKey,
   authenticateAdmin,
   authenticateUser,
   authenticateUserOrAdmin,
+  authenticateAgentToken,
   requireRole,
   requireAdmin,
   corsMiddleware,

@@ -343,6 +343,17 @@ export const getAdminServiceRatesApi = (config) =>
 export const updateAdminServiceRatesApi = (data, config) =>
   request({ url: '/admin/service-rates', method: 'PUT', data, ...config })
 
+// Agent Token 管理
+export const getAgentTokensApi = () => request({ url: '/admin/agent-tokens', method: 'GET' })
+export const createAgentTokenApi = (data) =>
+  request({ url: '/admin/agent-tokens', method: 'POST', data })
+export const updateAgentTokenApi = (id, data) =>
+  request({ url: `/admin/agent-tokens/${id}`, method: 'PUT', data })
+export const deleteAgentTokenApi = (id) =>
+  request({ url: `/admin/agent-tokens/${id}`, method: 'DELETE' })
+export const regenerateAgentTokenApi = (id) =>
+  request({ url: `/admin/agent-tokens/${id}/regenerate`, method: 'POST' })
+
 // 系统
 export const checkUpdatesApi = () => request({ url: '/admin/check-updates', method: 'GET' })
 export const getClaudeCodeVersionApi = () =>
