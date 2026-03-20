@@ -19,30 +19,37 @@ const router = express.Router()
 const PLATFORM_FETCHERS = {
   claude: {
     fetch: () => claudeAccountService.getAllAccounts(),
+    getOne: (id) => claudeAccountService.getAccount(id),
     opts: {}
   },
   'claude-console': {
     fetch: () => claudeConsoleAccountService.getAllAccounts(),
+    getOne: (id) => claudeConsoleAccountService.getAccount(id),
     opts: {}
   },
   gemini: {
     fetch: () => geminiAccountService.getAllAccounts(),
+    getOne: (id) => geminiAccountService.getAccount(id),
     opts: { checkGeminiRateLimit: true }
   },
   'gemini-api': {
     fetch: () => geminiApiAccountService.getAllAccounts(true),
+    getOne: (id) => geminiApiAccountService.getAccount(id),
     opts: { isStringType: true }
   },
   openai: {
     fetch: () => openaiAccountService.getAllAccounts(),
+    getOne: (id) => openaiAccountService.getAccount(id),
     opts: { isStringType: true }
   },
   'openai-responses': {
     fetch: () => openaiResponsesAccountService.getAllAccounts(true),
+    getOne: (id) => openaiResponsesAccountService.getAccount(id),
     opts: { isStringType: true }
   },
   'azure-openai': {
     fetch: () => azureOpenaiAccountService.getAllAccounts(),
+    getOne: (id) => azureOpenaiAccountService.getAccount(id),
     opts: { isStringType: true }
   },
   bedrock: {
@@ -50,14 +57,20 @@ const PLATFORM_FETCHERS = {
       const result = await bedrockAccountService.getAllAccounts()
       return result.success ? result.data : []
     },
+    getOne: async (id) => {
+      const result = await bedrockAccountService.getAccount(id)
+      return result.success ? result.data : null
+    },
     opts: {}
   },
   droid: {
     fetch: () => droidAccountService.getAllAccounts(),
+    getOne: (id) => droidAccountService.getAccount(id),
     opts: { isDroid: true }
   },
   ccr: {
     fetch: () => ccrAccountService.getAllAccounts(),
+    getOne: (id) => ccrAccountService.getAccount(id),
     opts: {}
   }
 }
@@ -183,6 +196,59 @@ router.get('/accounts/status', authenticateAgentToken, async (req, res) => {
     logger.error('Failed to get account status:', error)
     return res.status(500).json({
       error: 'Failed to get account status',
+      message: error.message
+    })
+  }
+})
+
+// 🔍 查询指定账户的详细状态和用量
+router.get('/accounts/:id', authenticateAgentToken, async (req, res) => {
+  try {
+    const { id } = req.params
+    const { platform } = req.query
+
+    if (!platform) {
+      return res.status(400).json({
+        error: 'Missing platform parameter',
+        message: 'Please specify a platform',
+        availablePlatforms: Object.keys(PLATFORM_FETCHERS)
+      })
+    }
+
+    const fetcher = PLATFORM_FETCHERS[platform]
+    if (!fetcher) {
+      return res.status(400).json({
+        error: 'Invalid platform',
+        message: `Unknown platform: ${platform}`,
+        availablePlatforms: Object.keys(PLATFORM_FETCHERS)
+      })
+    }
+
+    const account = await fetcher.getOne(id)
+    if (!account) {
+      return res.status(404).json({
+        error: 'Account not found',
+        message: `No account found with id: ${id} on platform: ${platform}`
+      })
+    }
+
+    const classification = classifyAccount(account, fetcher.opts)
+    const usage = await redis.getAccountUsageStats(id)
+
+    return res.json({
+      success: true,
+      data: {
+        account: {
+          ...sanitizeAccount(account),
+          _classification: classification
+        },
+        usage
+      }
+    })
+  } catch (error) {
+    logger.error('Failed to get account detail:', error)
+    return res.status(500).json({
+      error: 'Failed to get account detail',
       message: error.message
     })
   }
