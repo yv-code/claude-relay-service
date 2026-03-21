@@ -1,0 +1,115 @@
+name: Manual GHCR Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '版本 Tag（必须包含后缀，例如: v1.1.296-custom.1, v2.0.0-beta.1）'
+        required: true
+        type: string
+      platforms:
+        description: '构建平台'
+        required: false
+        type: choice
+        default: 'linux/amd64,linux/arm64'
+        options:
+          - 'linux/amd64,linux/arm64'
+          - 'linux/amd64'
+          - 'linux/arm64'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Validate tag format
+      id: validate
+      run: |
+        TAG="${{ github.event.inputs.tag }}"
+
+        # 必须以 v 开头
+        if [[ ! "$TAG" =~ ^v[0-9] ]]; then
+          echo "::error::Tag 必须以 'v' + 数字开头，例如: v1.1.296-custom.1"
+          exit 1
+        fi
+
+        # 必须包含 '-' 后缀，避免与自动发布流的 vX.Y.Z 纯数字 tag 冲突
+        if [[ ! "$TAG" =~ - ]]; then
+          echo "::error::Tag 必须包含后缀（如 -custom.1, -beta.1），纯 vX.Y.Z 格式由自动发布流管理"
+          exit 1
+        fi
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check tag does not already exist
+      run: |
+        TAG="${{ github.event.inputs.tag }}"
+        if git rev-parse "$TAG" >/dev/null 2>&1; then
+          echo "::error::Tag $TAG 已存在，请使用其他 tag"
+          exit 1
+        fi
+
+    - name: Prepare GHCR image name
+      id: image
+      run: |
+        GHCR_IMAGE=$(echo "ghcr.io/${{ github.repository_owner }}/claude-relay-service" | tr '[:upper:]' '[:lower:]')
+        echo "ghcr_image=${GHCR_IMAGE}" >> $GITHUB_OUTPUT
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    # 先构建推送镜像，成功后再打 tag 和创建 release
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        platforms: ${{ github.event.inputs.platforms }}
+        push: true
+        tags: |
+          ${{ steps.image.outputs.ghcr_image }}:${{ github.event.inputs.tag }}
+        labels: |
+          org.opencontainers.image.version=${{ github.event.inputs.tag }}
+          org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.source=https://github.com/${{ github.repository }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    # 镜像推送成功后才创建 tag，失败时不会留下孤立 tag
+    - name: Create and push Git tag
+      run: |
+        TAG="${{ github.event.inputs.tag }}"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "$TAG" -m "Release $TAG"
+        git push origin "$TAG"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.event.inputs.tag }}
+        name: Release ${{ github.event.inputs.tag }}
+        body: |
+          ## Docker 镜像
+
+          ```bash
+          docker pull ${{ steps.image.outputs.ghcr_image }}:${{ github.event.inputs.tag }}
+          ```
+        draft: false
+        prerelease: true
+        generate_release_notes: true
