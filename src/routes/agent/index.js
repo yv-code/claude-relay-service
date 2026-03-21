@@ -147,14 +147,14 @@ const sanitizeAccount = (acc) => {
   return result
 }
 
-// 📊 查询指定平台的账户状态
-router.get('/accounts/status', authenticateAgentToken, async (req, res) => {
+// 📋 查询指定平台的账户列表（仅 id 和启用状态）
+router.get('/accounts', authenticateAgentToken, async (req, res) => {
   try {
     const { platform } = req.query
 
     if (!platform) {
       return res.status(400).json({
-        error: 'Missing platform parameter',
+        success: false,
         message: 'Please specify a platform',
         availablePlatforms: Object.keys(PLATFORM_FETCHERS)
       })
@@ -163,7 +163,53 @@ router.get('/accounts/status', authenticateAgentToken, async (req, res) => {
     const fetcher = PLATFORM_FETCHERS[platform]
     if (!fetcher) {
       return res.status(400).json({
-        error: 'Invalid platform',
+        success: false,
+        message: `Unknown platform: ${platform}`,
+        availablePlatforms: Object.keys(PLATFORM_FETCHERS)
+      })
+    }
+
+    const accounts = await fetcher.fetch()
+    const list = accounts.map((acc) => ({
+      id: acc.id,
+      name: acc.name || acc.email || acc.accountName || null,
+      isActive: normalizeBoolean(acc.isActive)
+    }))
+
+    return res.json({
+      success: true,
+      data: {
+        platform,
+        total: list.length,
+        accounts: list
+      }
+    })
+  } catch (error) {
+    logger.error('Failed to get account list:', error)
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+})
+
+// 📊 查询指定平台的账户状态
+router.get('/accounts/status', authenticateAgentToken, async (req, res) => {
+  try {
+    const { platform } = req.query
+
+    if (!platform) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please specify a platform',
+        availablePlatforms: Object.keys(PLATFORM_FETCHERS)
+      })
+    }
+
+    const fetcher = PLATFORM_FETCHERS[platform]
+    if (!fetcher) {
+      return res.status(400).json({
+        success: false,
         message: `Unknown platform: ${platform}`,
         availablePlatforms: Object.keys(PLATFORM_FETCHERS)
       })
@@ -195,7 +241,7 @@ router.get('/accounts/status', authenticateAgentToken, async (req, res) => {
   } catch (error) {
     logger.error('Failed to get account status:', error)
     return res.status(500).json({
-      error: 'Failed to get account status',
+      success: false,
       message: error.message
     })
   }
@@ -205,39 +251,36 @@ router.get('/accounts/status', authenticateAgentToken, async (req, res) => {
 router.get('/accounts/:id', authenticateAgentToken, async (req, res) => {
   try {
     const { id } = req.params
-    const { platform } = req.query
 
-    if (!platform) {
-      return res.status(400).json({
-        error: 'Missing platform parameter',
-        message: 'Please specify a platform',
-        availablePlatforms: Object.keys(PLATFORM_FETCHERS)
-      })
+    // 遍历所有平台查找账户（ID 全局唯一）
+    let account = null
+    let matchedPlatform = null
+    let matchedOpts = {}
+
+    for (const [platform, fetcher] of Object.entries(PLATFORM_FETCHERS)) {
+      const result = await fetcher.getOne(id)
+      if (result) {
+        account = result
+        matchedPlatform = platform
+        matchedOpts = fetcher.opts
+        break
+      }
     }
 
-    const fetcher = PLATFORM_FETCHERS[platform]
-    if (!fetcher) {
-      return res.status(400).json({
-        error: 'Invalid platform',
-        message: `Unknown platform: ${platform}`,
-        availablePlatforms: Object.keys(PLATFORM_FETCHERS)
-      })
-    }
-
-    const account = await fetcher.getOne(id)
     if (!account) {
       return res.status(404).json({
-        error: 'Account not found',
-        message: `No account found with id: ${id} on platform: ${platform}`
+        success: false,
+        message: `No account found with id: ${id}`
       })
     }
 
-    const classification = classifyAccount(account, fetcher.opts)
+    const classification = classifyAccount(account, matchedOpts)
     const usage = await redis.getAccountUsageStats(id)
 
     return res.json({
       success: true,
       data: {
+        platform: matchedPlatform,
         account: {
           ...sanitizeAccount(account),
           _classification: classification
@@ -248,7 +291,7 @@ router.get('/accounts/:id', authenticateAgentToken, async (req, res) => {
   } catch (error) {
     logger.error('Failed to get account detail:', error)
     return res.status(500).json({
-      error: 'Failed to get account detail',
+      success: false,
       message: error.message
     })
   }
