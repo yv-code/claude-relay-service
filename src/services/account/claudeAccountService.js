@@ -2200,6 +2200,30 @@ class ClaudeAccountService {
     }
   }
 
+  /**
+   * 刷新单个账户的 OAuth Usage（带缓存检查）
+   * @param {string} accountId
+   * @param {string|null} lastUpdatedAt - claudeUsage.updatedAt 或 claudeUsageUpdatedAt
+   * @param {number} cacheTtlMs - 缓存有效期，默认 300s
+   * @returns {object|null} 刷新后的 claudeUsage 快照，无需刷新或失败时返回 null
+   */
+  async refreshOAuthUsage(accountId, lastUpdatedAt = null, cacheTtlMs = 300000) {
+    const lastUpdated = lastUpdatedAt ? new Date(lastUpdatedAt).getTime() : 0
+    if (lastUpdated && Date.now() - lastUpdated < cacheTtlMs) {
+      return null
+    }
+    try {
+      const usageData = await this.fetchOAuthUsage(accountId)
+      if (!usageData) return null
+      await this.updateClaudeUsageSnapshot(accountId, usageData)
+      const updatedAccount = await redis.getClaudeAccount(accountId)
+      return this.buildClaudeUsageSnapshot(updatedAccount)
+    } catch (error) {
+      logger.debug(`Failed to refresh OAuth usage for ${accountId}:`, error.message)
+      return null
+    }
+  }
+
   // 📊 获取账号 Profile 信息并更新账号类型
   async fetchAndUpdateAccountProfile(accountId, accessToken = null, agent = null) {
     try {

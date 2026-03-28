@@ -536,52 +536,27 @@ router.get('/claude-accounts', authenticateAdmin, async (req, res) => {
 router.get('/claude-accounts/usage', authenticateAdmin, async (req, res) => {
   try {
     const accounts = await redis.getAllClaudeAccounts()
-    const now = Date.now()
-    const usageCacheTtlMs = 300 * 1000
 
     // 批量并发获取所有活跃 OAuth 账户的 Usage
     const usagePromises = accounts.map(async (account) => {
-      // 检查是否为 OAuth 账户：scopes 包含 OAuth 相关权限
       const scopes = account.scopes && account.scopes.trim() ? account.scopes.split(' ') : []
       const isOAuth = scopes.includes('user:profile') && scopes.includes('user:inference')
 
-      // 仅为 OAuth 授权的活跃账户调用 usage API
       if (
         isOAuth &&
         account.isActive === 'true' &&
         account.accessToken &&
         account.status === 'active'
       ) {
-        // 若快照在 300 秒内更新，直接使用缓存避免频繁请求
-        const cachedUsage = claudeAccountService.buildClaudeUsageSnapshot(account)
-        const lastUpdatedAt = account.claudeUsageUpdatedAt
-          ? new Date(account.claudeUsageUpdatedAt).getTime()
-          : 0
-        const isCacheFresh = cachedUsage && lastUpdatedAt && now - lastUpdatedAt < usageCacheTtlMs
-        if (isCacheFresh) {
-          return {
-            accountId: account.id,
-            claudeUsage: cachedUsage
-          }
-        }
-
-        try {
-          const usageData = await claudeAccountService.fetchOAuthUsage(account.id)
-          if (usageData) {
-            await claudeAccountService.updateClaudeUsageSnapshot(account.id, usageData)
-          }
-          // 重新读取更新后的数据
-          const updatedAccount = await redis.getClaudeAccount(account.id)
-          return {
-            accountId: account.id,
-            claudeUsage: claudeAccountService.buildClaudeUsageSnapshot(updatedAccount)
-          }
-        } catch (error) {
-          logger.debug(`Failed to fetch OAuth usage for ${account.id}:`, error.message)
-          return { accountId: account.id, claudeUsage: null }
+        const refreshed = await claudeAccountService.refreshOAuthUsage(
+          account.id,
+          account.claudeUsageUpdatedAt
+        )
+        return {
+          accountId: account.id,
+          claudeUsage: refreshed || claudeAccountService.buildClaudeUsageSnapshot(account)
         }
       }
-      // Setup Token 账户不调用 usage API，直接返回 null
       return { accountId: account.id, claudeUsage: null }
     })
 

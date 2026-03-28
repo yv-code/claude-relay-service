@@ -248,6 +248,21 @@ router.get('/accounts/status', authenticateAgentToken, async (req, res) => {
       fetcher.fetch(),
       upstreamErrorHelper.getAllTempUnavailable()
     ])
+
+    // Claude 平台：主动刷新 OAuth Usage（复用 service 层逻辑，300s 缓存）
+    if (platform === 'claude') {
+      await Promise.allSettled(
+        accounts.map(async (acc) => {
+          if (acc.authType !== 'oauth' || !acc.isActive) return
+          const refreshed = await claudeAccountService.refreshOAuthUsage(
+            acc.id,
+            acc.claudeUsage?.updatedAt
+          )
+          if (refreshed) acc.claudeUsage = refreshed
+        })
+      )
+    }
+
     const stats = { normal: 0, abnormal: 0, paused: 0, rateLimited: 0, tempUnavailable: 0 }
     const accountSummaries = []
 
