@@ -15,16 +15,36 @@ jest.mock('../src/middleware/auth', () => ({
 }))
 
 // Mock account services (required by agent/index.js imports)
-jest.mock('../src/services/account/claudeAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue([]) }))
-jest.mock('../src/services/account/claudeConsoleAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue([]) }))
-jest.mock('../src/services/account/bedrockAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue({ success: true, data: [] }) }))
-jest.mock('../src/services/account/ccrAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue([]) }))
-jest.mock('../src/services/account/geminiAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue([]) }))
-jest.mock('../src/services/account/geminiApiAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue([]) }))
-jest.mock('../src/services/account/openaiAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue([]) }))
-jest.mock('../src/services/account/openaiResponsesAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue([]) }))
-jest.mock('../src/services/account/azureOpenaiAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue([]) }))
-jest.mock('../src/services/account/droidAccountService', () => ({ getAllAccounts: jest.fn().mockResolvedValue([]) }))
+jest.mock('../src/services/account/claudeAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue([])
+}))
+jest.mock('../src/services/account/claudeConsoleAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue([])
+}))
+jest.mock('../src/services/account/bedrockAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue({ success: true, data: [] })
+}))
+jest.mock('../src/services/account/ccrAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue([])
+}))
+jest.mock('../src/services/account/geminiAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue([])
+}))
+jest.mock('../src/services/account/geminiApiAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue([])
+}))
+jest.mock('../src/services/account/openaiAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue([])
+}))
+jest.mock('../src/services/account/openaiResponsesAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue([])
+}))
+jest.mock('../src/services/account/azureOpenaiAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue([])
+}))
+jest.mock('../src/services/account/droidAccountService', () => ({
+  getAllAccounts: jest.fn().mockResolvedValue([])
+}))
 
 // Mock logger
 jest.mock('../src/utils/logger', () => ({
@@ -46,9 +66,18 @@ jest.mock('../src/utils/upstreamErrorHelper', () => ({
 const createMockPipeline = (results) => {
   const cmds = []
   const pl = {
-    hget: jest.fn((...args) => { cmds.push({ cmd: 'hget', args }); return pl }),
-    hgetall: jest.fn((...args) => { cmds.push({ cmd: 'hgetall', args }); return pl }),
-    get: jest.fn((...args) => { cmds.push({ cmd: 'get', args }); return pl }),
+    hget: jest.fn((...args) => {
+      cmds.push({ cmd: 'hget', args })
+      return pl
+    }),
+    hgetall: jest.fn((...args) => {
+      cmds.push({ cmd: 'hgetall', args })
+      return pl
+    }),
+    get: jest.fn((...args) => {
+      cmds.push({ cmd: 'get', args })
+      return pl
+    }),
     exec: jest.fn().mockResolvedValue(results),
     _cmds: cmds
   }
@@ -80,20 +109,18 @@ describe('POST /agent/keys/usage', () => {
 
   // --- 参数校验 ---
 
-  it('should return 400 when keys is missing', async () => {
+  it('should return 400 when neither keys nor tag is provided', async () => {
     const res = await request(app)
       .post('/agent/keys/usage')
       .send({ startTime: '2026-03-28 00:00', endTime: '2026-03-28 23:59' })
 
     expect(res.status).toBe(400)
     expect(res.body.success).toBe(false)
-    expect(res.body.message).toMatch(/keys/)
+    expect(res.body.message).toMatch(/keys.*tag|tag.*keys/)
   })
 
-  it('should return 400 when keys is empty array', async () => {
-    const res = await request(app)
-      .post('/agent/keys/usage')
-      .send({ keys: [] })
+  it('should return 400 when keys is empty array and no tag', async () => {
+    const res = await request(app).post('/agent/keys/usage').send({ keys: [] })
 
     expect(res.status).toBe(400)
     expect(res.body.success).toBe(false)
@@ -160,9 +187,7 @@ describe('POST /agent/keys/usage', () => {
     const usagePipeline = createMockPipeline([])
 
     const mockClient = {
-      pipeline: jest.fn()
-        .mockReturnValueOnce(idPipeline)
-        .mockReturnValueOnce(usagePipeline)
+      pipeline: jest.fn().mockReturnValueOnce(idPipeline).mockReturnValueOnce(usagePipeline)
     }
     mockRedis.getClientSafe.mockReturnValue(mockClient)
 
@@ -187,7 +212,8 @@ describe('POST /agent/keys/usage', () => {
     ])
 
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline([])), // usage pipeline
       zrangebylex: jest.fn().mockResolvedValue(['my-key\x00resolved-id']),
@@ -214,12 +240,11 @@ describe('POST /agent/keys/usage', () => {
   })
 
   it('should report unresolved keys in notFound', async () => {
-    const idPipeline = createMockPipeline([
-      [null, null]
-    ])
+    const idPipeline = createMockPipeline([[null, null]])
 
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline([])),
       zrangebylex: jest.fn().mockResolvedValue([]) // name lookup also fails
@@ -243,30 +268,56 @@ describe('POST /agent/keys/usage', () => {
 
   it('should aggregate same-day hourly usage for a single key', async () => {
     // key1 resolved by id
-    const idPipeline = createMockPipeline([
-      [null, 'TestKey']
-    ])
+    const idPipeline = createMockPipeline([[null, 'TestKey']])
 
     // Same-day: startHour=10, endHour=12 → 3 hourly buckets
     // Each hourly bucket = 2 pipeline cmds: hgetall + get(cost)
     // 3 hours × 2 = 6 results
     const usageResults = [
       // hour 10
-      [null, { requests: '10', inputTokens: '100', outputTokens: '200', cacheCreateTokens: '0', cacheReadTokens: '0', allTokens: '300' }],
+      [
+        null,
+        {
+          requests: '10',
+          inputTokens: '100',
+          outputTokens: '200',
+          cacheCreateTokens: '0',
+          cacheReadTokens: '0',
+          allTokens: '300'
+        }
+      ],
       [null, '1.50'],
       // hour 11
-      [null, { requests: '20', inputTokens: '200', outputTokens: '400', cacheCreateTokens: '50', cacheReadTokens: '100', allTokens: '750' }],
+      [
+        null,
+        {
+          requests: '20',
+          inputTokens: '200',
+          outputTokens: '400',
+          cacheCreateTokens: '50',
+          cacheReadTokens: '100',
+          allTokens: '750'
+        }
+      ],
       [null, '3.00'],
       // hour 12
-      [null, { requests: '5', inputTokens: '50', outputTokens: '100', cacheCreateTokens: '0', cacheReadTokens: '0', allTokens: '150' }],
+      [
+        null,
+        {
+          requests: '5',
+          inputTokens: '50',
+          outputTokens: '100',
+          cacheCreateTokens: '0',
+          cacheReadTokens: '0',
+          allTokens: '150'
+        }
+      ],
       [null, '0.75']
     ]
     const usagePipeline = createMockPipeline(usageResults)
 
     const mockClient = {
-      pipeline: jest.fn()
-        .mockReturnValueOnce(idPipeline)
-        .mockReturnValueOnce(usagePipeline)
+      pipeline: jest.fn().mockReturnValueOnce(idPipeline).mockReturnValueOnce(usagePipeline)
     }
     mockRedis.getClientSafe.mockReturnValue(mockClient)
 
@@ -295,26 +346,58 @@ describe('POST /agent/keys/usage', () => {
   })
 
   it('should use daily query for full days in multi-day range', async () => {
-    const idPipeline = createMockPipeline([
-      [null, 'K1']
-    ])
+    const idPipeline = createMockPipeline([[null, 'K1']])
 
     // 3/26 00:00 ~ 3/28 23:59 → all full days → 3 daily queries
     // Each daily = 3 cmds: hgetall + get(cost) + get(realCost)
     const usageResults = [
       // day 1
-      [null, { requests: '100', inputTokens: '1000', outputTokens: '2000', cacheCreateTokens: '0', cacheReadTokens: '0', allTokens: '3000' }],
-      [null, '10.00'], [null, '5.00'],
+      [
+        null,
+        {
+          requests: '100',
+          inputTokens: '1000',
+          outputTokens: '2000',
+          cacheCreateTokens: '0',
+          cacheReadTokens: '0',
+          allTokens: '3000'
+        }
+      ],
+      [null, '10.00'],
+      [null, '5.00'],
       // day 2
-      [null, { requests: '200', inputTokens: '2000', outputTokens: '4000', cacheCreateTokens: '0', cacheReadTokens: '0', allTokens: '6000' }],
-      [null, '20.00'], [null, '10.00'],
+      [
+        null,
+        {
+          requests: '200',
+          inputTokens: '2000',
+          outputTokens: '4000',
+          cacheCreateTokens: '0',
+          cacheReadTokens: '0',
+          allTokens: '6000'
+        }
+      ],
+      [null, '20.00'],
+      [null, '10.00'],
       // day 3
-      [null, { requests: '50', inputTokens: '500', outputTokens: '1000', cacheCreateTokens: '0', cacheReadTokens: '0', allTokens: '1500' }],
-      [null, '5.00'], [null, '2.50']
+      [
+        null,
+        {
+          requests: '50',
+          inputTokens: '500',
+          outputTokens: '1000',
+          cacheCreateTokens: '0',
+          cacheReadTokens: '0',
+          allTokens: '1500'
+        }
+      ],
+      [null, '5.00'],
+      [null, '2.50']
     ]
 
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline(usageResults))
     }
@@ -344,15 +427,38 @@ describe('POST /agent/keys/usage', () => {
     // Full-day query → 1 daily × 3 cmds per key = 3 per key, 6 total
     const usageResults = [
       // key-a day
-      [null, { requests: '10', inputTokens: '100', outputTokens: '200', cacheCreateTokens: '0', cacheReadTokens: '0', allTokens: '300' }],
-      [null, '2.00'], [null, '1.00'],
+      [
+        null,
+        {
+          requests: '10',
+          inputTokens: '100',
+          outputTokens: '200',
+          cacheCreateTokens: '0',
+          cacheReadTokens: '0',
+          allTokens: '300'
+        }
+      ],
+      [null, '2.00'],
+      [null, '1.00'],
       // key-b day
-      [null, { requests: '30', inputTokens: '300', outputTokens: '600', cacheCreateTokens: '0', cacheReadTokens: '0', allTokens: '900' }],
-      [null, '6.00'], [null, '3.00']
+      [
+        null,
+        {
+          requests: '30',
+          inputTokens: '300',
+          outputTokens: '600',
+          cacheCreateTokens: '0',
+          cacheReadTokens: '0',
+          allTokens: '900'
+        }
+      ],
+      [null, '6.00'],
+      [null, '3.00']
     ]
 
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline(usageResults))
     }
@@ -377,7 +483,8 @@ describe('POST /agent/keys/usage', () => {
   it('should default timezone to +08:00', async () => {
     const idPipeline = createMockPipeline([[null, 'K']])
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline([]))
     }
@@ -398,7 +505,8 @@ describe('POST /agent/keys/usage', () => {
   it('should accept negative timezone offset', async () => {
     const idPipeline = createMockPipeline([[null, 'K']])
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline([]))
     }
@@ -425,12 +533,24 @@ describe('POST /agent/keys/usage', () => {
     // Query a date >7 days ago with partial hours → should fallback to daily
     // daily-fallback = 3 cmds
     const usageResults = [
-      [null, { requests: '50', inputTokens: '500', outputTokens: '1000', cacheCreateTokens: '0', cacheReadTokens: '0', allTokens: '1500' }],
-      [null, '5.00'], [null, '2.50']
+      [
+        null,
+        {
+          requests: '50',
+          inputTokens: '500',
+          outputTokens: '1000',
+          cacheCreateTokens: '0',
+          cacheReadTokens: '0',
+          allTokens: '1500'
+        }
+      ],
+      [null, '5.00'],
+      [null, '2.50']
     ]
 
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline(usageResults))
     }
@@ -453,7 +573,8 @@ describe('POST /agent/keys/usage', () => {
   it('should return correct response structure', async () => {
     const idPipeline = createMockPipeline([[null, 'K']])
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline([]))
     }
@@ -491,7 +612,8 @@ describe('POST /agent/keys/usage', () => {
   it('should use default start/end time when not provided', async () => {
     const idPipeline = createMockPipeline([[null, 'K']])
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline([]))
     }
@@ -513,10 +635,13 @@ describe('POST /agent/keys/usage', () => {
     const idPipeline = createMockPipeline([[null, 'EmptyKey']])
     // daily query returns empty hash and null costs
     const usageResults = [
-      [null, {}], [null, null], [null, null]
+      [null, {}],
+      [null, null],
+      [null, null]
     ]
     const mockClient = {
-      pipeline: jest.fn()
+      pipeline: jest
+        .fn()
         .mockReturnValueOnce(idPipeline)
         .mockReturnValueOnce(createMockPipeline(usageResults))
     }
@@ -537,5 +662,100 @@ describe('POST /agent/keys/usage', () => {
     expect(keyData.outputTokens).toBe(0)
     expect(keyData.cost).toBe(0)
     expect(keyData.realCost).toBe(0)
+  })
+
+  // --- Tag 支持 ---
+
+  it('should resolve keys by tag', async () => {
+    const idPipeline = createMockPipeline([[null, 'TaggedKey1']])
+    const usagePipeline = createMockPipeline([])
+
+    const mockClient = {
+      smembers: jest.fn().mockResolvedValue(['tag-key-1']),
+      pipeline: jest.fn().mockReturnValueOnce(idPipeline).mockReturnValueOnce(usagePipeline)
+    }
+    mockRedis.getClientSafe.mockReturnValue(mockClient)
+
+    const res = await request(app).post('/agent/keys/usage').send({
+      tag: 'alice',
+      startTime: '2026-03-28 00:00',
+      endTime: '2026-03-28 23:59'
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockClient.smembers).toHaveBeenCalledWith('apikey:tag:alice')
+    expect(res.body.data.keys).toHaveProperty('tag-key-1')
+    expect(res.body.data.keys['tag-key-1'].name).toBe('TaggedKey1')
+  })
+
+  it('should return empty result when tag has no associated keys', async () => {
+    const mockClient = {
+      smembers: jest.fn().mockResolvedValue([])
+    }
+    mockRedis.getClientSafe.mockReturnValue(mockClient)
+
+    const res = await request(app).post('/agent/keys/usage').send({
+      tag: 'nobody',
+      startTime: '2026-03-28 00:00',
+      endTime: '2026-03-28 23:59'
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.data.keys).toEqual({})
+    expect(res.body.data.total.requests).toBe(0)
+  })
+
+  it('should union tag keys with explicit keys', async () => {
+    // tag resolves to tag-key-1, explicit key is explicit-key-1
+    const idPipeline = createMockPipeline([
+      [null, 'ExplicitKey'],
+      [null, 'TaggedKey']
+    ])
+    const usagePipeline = createMockPipeline([])
+
+    const mockClient = {
+      smembers: jest.fn().mockResolvedValue(['tag-key-1']),
+      pipeline: jest.fn().mockReturnValueOnce(idPipeline).mockReturnValueOnce(usagePipeline)
+    }
+    mockRedis.getClientSafe.mockReturnValue(mockClient)
+
+    const res = await request(app)
+      .post('/agent/keys/usage')
+      .send({
+        keys: ['explicit-key-1'],
+        tag: 'alice',
+        startTime: '2026-03-28 00:00',
+        endTime: '2026-03-28 23:59'
+      })
+
+    expect(res.status).toBe(200)
+    expect(res.body.data.keys).toHaveProperty('explicit-key-1')
+    expect(res.body.data.keys).toHaveProperty('tag-key-1')
+  })
+
+  it('should deduplicate when tag and keys overlap', async () => {
+    // tag resolves to same key as explicit
+    const idPipeline = createMockPipeline([[null, 'SameKey']])
+    const usagePipeline = createMockPipeline([])
+
+    const mockClient = {
+      smembers: jest.fn().mockResolvedValue(['key-1']),
+      pipeline: jest.fn().mockReturnValueOnce(idPipeline).mockReturnValueOnce(usagePipeline)
+    }
+    mockRedis.getClientSafe.mockReturnValue(mockClient)
+
+    const res = await request(app)
+      .post('/agent/keys/usage')
+      .send({
+        keys: ['key-1'],
+        tag: 'alice',
+        startTime: '2026-03-28 00:00',
+        endTime: '2026-03-28 23:59'
+      })
+
+    expect(res.status).toBe(200)
+    // Should only have one entry, not duplicated
+    expect(Object.keys(res.body.data.keys)).toHaveLength(1)
+    expect(res.body.data.keys).toHaveProperty('key-1')
   })
 })

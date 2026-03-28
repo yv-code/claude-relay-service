@@ -242,4 +242,70 @@ describe('POST /agent/keys/usage (integration)', () => {
     expect(data.timezone).toBe('+08:00')
     expect(Array.isArray(data.notFound)).toBe(true)
   })
+
+  // --- Tag 支持 ---
+
+  testOrSkip('should query usage by tag (multi-key)', async () => {
+    const res = await request(app).post('/agent/keys/usage').send({
+      tag: 'test-user',
+      startTime: '2026-03-28 00:00',
+      endTime: '2026-03-28 23:59'
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.success).toBe(true)
+
+    const { keys, total } = res.body.data
+    // test-user tag 关联了 key1 和 key2
+    expect(keys[TEST_KEYS.key1.id]).toBeDefined()
+    expect(keys[TEST_KEYS.key2.id]).toBeDefined()
+    // key1: 70 + key2: 50 = 120
+    expect(total.requests).toBe(120)
+    expect(total.cost).toBe(12.5)
+  })
+
+  testOrSkip('should query usage by tag (single-key)', async () => {
+    const res = await request(app).post('/agent/keys/usage').send({
+      tag: 'solo-user',
+      startTime: '2026-03-28 00:00',
+      endTime: '2026-03-28 23:59'
+    })
+
+    expect(res.status).toBe(200)
+    const { keys } = res.body.data
+    // solo-user tag 只关联 key1
+    expect(keys[TEST_KEYS.key1.id]).toBeDefined()
+    expect(Object.keys(keys)).toHaveLength(1)
+    expect(keys[TEST_KEYS.key1.id].requests).toBe(70)
+  })
+
+  testOrSkip('should return empty result for unknown tag', async () => {
+    const res = await request(app).post('/agent/keys/usage').send({
+      tag: 'nonexistent-tag',
+      startTime: '2026-03-28 00:00',
+      endTime: '2026-03-28 23:59'
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.data.keys).toEqual({})
+    expect(res.body.data.total.requests).toBe(0)
+  })
+
+  testOrSkip('should union tag and explicit keys', async () => {
+    // solo-user has key1, explicitly pass key2
+    const res = await request(app)
+      .post('/agent/keys/usage')
+      .send({
+        keys: [TEST_KEYS.key2.id],
+        tag: 'solo-user',
+        startTime: '2026-03-28 00:00',
+        endTime: '2026-03-28 23:59'
+      })
+
+    expect(res.status).toBe(200)
+    const { keys, total } = res.body.data
+    expect(keys[TEST_KEYS.key1.id]).toBeDefined()
+    expect(keys[TEST_KEYS.key2.id]).toBeDefined()
+    expect(total.requests).toBe(120)
+  })
 })

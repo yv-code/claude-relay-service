@@ -182,6 +182,14 @@ async function setup() {
   })
   await writeCost(TEST_KEYS.key1.id, '2026-03-27', 0, 20.0, 10.0)
 
+  // 为 key1 和 key2 添加 tag（模拟管理员打标签）
+  const client = redis.getClientSafe()
+  const tagPipeline = client.pipeline()
+  tagPipeline.sadd('apikey:tag:test-user', TEST_KEYS.key1.id)
+  tagPipeline.sadd('apikey:tag:test-user', TEST_KEYS.key2.id)
+  tagPipeline.sadd('apikey:tag:solo-user', TEST_KEYS.key1.id)
+  await tagPipeline.exec()
+
   // --- key2 用量 ---
   // 3/28 hour 10（整日写一条 hourly 也会累加到 daily）
   await writeUsage(TEST_KEYS.key2.id, '2026-03-28', 10, {
@@ -228,6 +236,10 @@ async function teardown() {
       }
     }
   }
+
+  // 清理 tag 索引
+  pipeline.del('apikey:tag:test-user')
+  pipeline.del('apikey:tag:solo-user')
 
   await pipeline.exec()
 

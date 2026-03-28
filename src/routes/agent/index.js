@@ -426,12 +426,15 @@ const buildQueryPlan = (dates, startDate, endDate, startHour, endHour, hourlyAva
 // 📊 查询多 Key 在指定时间区间的用量
 router.post('/keys/usage', authenticateAgentToken, async (req, res) => {
   try {
-    const { keys, startTime, endTime, timezone = '+08:00' } = req.body
+    const { keys, tag, startTime, endTime, timezone = '+08:00' } = req.body
 
-    if (!keys || !Array.isArray(keys) || keys.length === 0) {
+    // keys 和 tag 至少提供一个
+    const hasKeys = Array.isArray(keys) && keys.length > 0
+    const hasTag = typeof tag === 'string' && tag.trim().length > 0
+    if (!hasKeys && !hasTag) {
       return res.status(400).json({
         success: false,
-        message: 'keys is required and must be a non-empty array'
+        message: 'At least one of keys or tag is required'
       })
     }
 
@@ -486,25 +489,60 @@ router.post('/keys/usage', authenticateAgentToken, async (req, res) => {
       })
     }
 
-    // Step 1: 解析 key 标识 → keyId
+    // Step 0: 通过 tag 解析 keyIds，与 keys 取并集
     const client = redis.getClientSafe()
+    const allKeyInputs = new Set(hasKeys ? keys : [])
+
+    if (hasTag) {
+      const tagMembers = await client.smembers(`apikey:tag:${tag.trim()}`)
+      for (const keyId of tagMembers) {
+        allKeyInputs.add(keyId)
+      }
+    }
+
+    // tag 查不到任何 key 且没有 keys 参数 → 返回空结果
+    if (allKeyInputs.size === 0) {
+      return res.json({
+        success: true,
+        data: {
+          startTime: startTime || formatTimeInTimezone(startUTC, callerOffset),
+          endTime: endTime || formatTimeInTimezone(endUTC, callerOffset),
+          timezone,
+          keys: {},
+          total: {
+            requests: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheCreateTokens: 0,
+            cacheReadTokens: 0,
+            allTokens: 0,
+            cost: 0,
+            realCost: 0
+          },
+          notFound: []
+        }
+      })
+    }
+
+    // Step 1: 解析 key 标识 → keyId
+    const keyInputs = [...allKeyInputs]
     const resolvedKeys = {} // keyId → name
     const notFound = []
 
     // 先按 keyId 查找
     const idCheckPipeline = client.pipeline()
-    for (const k of keys) {
+    for (const k of keyInputs) {
       idCheckPipeline.hget(`apikey:${k}`, 'name')
     }
     const idCheckResults = await idCheckPipeline.exec()
 
     const unresolvedValues = []
-    for (let i = 0; i < keys.length; i++) {
+    for (let i = 0; i < keyInputs.length; i++) {
       const name = idCheckResults[i]?.[1]
       if (name !== null && name !== undefined) {
-        resolvedKeys[keys[i]] = name
+        resolvedKeys[keyInputs[i]] = name
       } else {
-        unresolvedValues.push(keys[i])
+        unresolvedValues.push(keyInputs[i])
       }
     }
 
