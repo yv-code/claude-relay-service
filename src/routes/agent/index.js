@@ -11,6 +11,7 @@ const openaiResponsesAccountService = require('../../services/account/openaiResp
 const azureOpenaiAccountService = require('../../services/account/azureOpenaiAccountService')
 const droidAccountService = require('../../services/account/droidAccountService')
 const redis = require('../../models/redis')
+const config = require('../../../config/config')
 const logger = require('../../utils/logger')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 
@@ -351,6 +352,335 @@ router.get('/accounts/:id', authenticateAgentToken, async (req, res) => {
     })
   } catch (error) {
     logger.error('Failed to get account detail:', error)
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+})
+
+// ============================================
+// Key Usage 查询辅助函数
+// ============================================
+
+// 解析时区字符串 "+08:00" / "-05:00" → 小时偏移量
+const parseTimezoneOffset = (tz) => {
+  const match = tz.match(/^([+-])(\d{2}):(\d{2})$/)
+  if (!match) return null
+  const sign = match[1] === '+' ? 1 : -1
+  return sign * (parseInt(match[2]) + parseInt(match[3]) / 60)
+}
+
+// 解析 "YYYY-MM-DD HH:mm" + 时区偏移 → UTC Date
+const parseTimeInTimezone = (timeStr, offsetHours) => {
+  const match = timeStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/)
+  if (!match) return null
+  const [, y, m, d, h, min] = match
+  const utcEquiv = new Date(
+    Date.UTC(parseInt(y), parseInt(m) - 1, parseInt(d), parseInt(h), parseInt(min), 0, 0)
+  )
+  return new Date(utcEquiv.getTime() - offsetHours * 3600000)
+}
+
+// Date → "YYYY-MM-DD"（使用 UTC 方法）
+const formatDateUTC = (d) =>
+  `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+
+// UTC Date → "YYYY-MM-DD HH:mm"（指定时区）
+const formatTimeInTimezone = (d, offsetHours) => {
+  const local = new Date(d.getTime() + offsetHours * 3600000)
+  return `${formatDateUTC(local)} ${String(local.getUTCHours()).padStart(2, '0')}:${String(local.getUTCMinutes()).padStart(2, '0')}`
+}
+
+// 构建查询计划：确定每个日期用 hourly 还是 daily 查询
+const buildQueryPlan = (dates, startDate, endDate, startHour, endHour, hourlyAvailableFromDate) => {
+  const plan = []
+
+  for (const date of dates) {
+    const isFirst = date === startDate
+    const isLast = date === endDate
+
+    let fromHour = isFirst ? startHour : 0
+    let toHour = isLast ? endHour : 23
+
+    // 完整天 → 直接用 daily
+    if (fromHour === 0 && toHour === 23) {
+      plan.push({ type: 'daily', date })
+      continue
+    }
+
+    // 部分天但小时数据已过期 → 回退到 daily
+    if (date < hourlyAvailableFromDate) {
+      plan.push({ type: 'daily-fallback', date })
+      continue
+    }
+
+    for (let h = fromHour; h <= toHour; h++) {
+      plan.push({ type: 'hourly', date, hour: h })
+    }
+  }
+
+  return plan
+}
+
+// 📊 查询多 Key 在指定时间区间的用量
+router.post('/keys/usage', authenticateAgentToken, async (req, res) => {
+  try {
+    const { keys, startTime, endTime, timezone = '+08:00' } = req.body
+
+    if (!keys || !Array.isArray(keys) || keys.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'keys is required and must be a non-empty array'
+      })
+    }
+
+    // 解析调用者时区
+    const callerOffset = parseTimezoneOffset(timezone)
+    if (callerOffset === null) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid timezone format: ${timezone}, expected format like +08:00 or -05:00`
+      })
+    }
+
+    const now = new Date()
+    const serverOffset = config.system.timezoneOffset || 8
+
+    // 解析起止时间 → UTC
+    let startUTC, endUTC
+    if (startTime) {
+      startUTC = parseTimeInTimezone(startTime, callerOffset)
+      if (!startUTC) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid startTime format: ${startTime}, expected YYYY-MM-DD HH:mm`
+        })
+      }
+    } else {
+      // 默认：调用者时区的当天 00:00
+      const callerNow = new Date(now.getTime() + callerOffset * 3600000)
+      callerNow.setUTCHours(0, 0, 0, 0)
+      startUTC = new Date(callerNow.getTime() - callerOffset * 3600000)
+    }
+
+    if (endTime) {
+      endUTC = parseTimeInTimezone(endTime, callerOffset)
+      if (!endUTC) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid endTime format: ${endTime}, expected YYYY-MM-DD HH:mm`
+        })
+      }
+    } else {
+      // 默认：调用者时区的当天 23:59
+      const callerNow = new Date(now.getTime() + callerOffset * 3600000)
+      callerNow.setUTCHours(23, 59, 59, 999)
+      endUTC = new Date(callerNow.getTime() - callerOffset * 3600000)
+    }
+
+    if (startUTC >= endUTC) {
+      return res.status(400).json({
+        success: false,
+        message: 'startTime must be before endTime'
+      })
+    }
+
+    // Step 1: 解析 key 标识 → keyId
+    const client = redis.getClientSafe()
+    const resolvedKeys = {} // keyId → name
+    const notFound = []
+
+    // 先按 keyId 查找
+    const idCheckPipeline = client.pipeline()
+    for (const k of keys) {
+      idCheckPipeline.hget(`apikey:${k}`, 'name')
+    }
+    const idCheckResults = await idCheckPipeline.exec()
+
+    const unresolvedValues = []
+    for (let i = 0; i < keys.length; i++) {
+      const name = idCheckResults[i]?.[1]
+      if (name !== null && name !== undefined) {
+        resolvedKeys[keys[i]] = name
+      } else {
+        unresolvedValues.push(keys[i])
+      }
+    }
+
+    // 未命中的按 name 查找（通过 apikey:idx:name 索引）
+    for (const value of unresolvedValues) {
+      const lowerName = value.toLowerCase()
+      const members = await client.zrangebylex(
+        'apikey:idx:name',
+        `[${lowerName}\x00`,
+        `[${lowerName}\x00\xff`
+      )
+      if (members.length > 0) {
+        const keyId = members[0].split('\x00')[1]
+        if (keyId) {
+          const actualName = await client.hget(`apikey:${keyId}`, 'name')
+          resolvedKeys[keyId] = actualName || value
+        } else {
+          notFound.push(value)
+        }
+      } else {
+        notFound.push(value)
+      }
+    }
+
+    // Step 2: 构建服务端时区的日期/小时范围
+    const startServerLocal = new Date(startUTC.getTime() + serverOffset * 3600000)
+    const endServerLocal = new Date(endUTC.getTime() + serverOffset * 3600000)
+
+    const startDate = formatDateUTC(startServerLocal)
+    const endDate = formatDateUTC(endServerLocal)
+    const startHour = startServerLocal.getUTCHours()
+    const endHour = endServerLocal.getUTCHours()
+
+    // 生成日期列表
+    const dates = []
+    const cursor = new Date(startServerLocal)
+    cursor.setUTCHours(0, 0, 0, 0)
+    const endDay = new Date(endServerLocal)
+    endDay.setUTCHours(0, 0, 0, 0)
+    while (cursor <= endDay) {
+      dates.push(formatDateUTC(cursor))
+      cursor.setUTCDate(cursor.getUTCDate() + 1)
+    }
+
+    // 小时数据可用截止（服务端时区的 7 天前日期）
+    const sevenDaysAgoServer = new Date(now.getTime() + serverOffset * 3600000 - 7 * 86400000)
+    const hourlyAvailableFromDate = formatDateUTC(sevenDaysAgoServer)
+
+    // 构建查询计划
+    const queryPlan = buildQueryPlan(
+      dates,
+      startDate,
+      endDate,
+      startHour,
+      endHour,
+      hourlyAvailableFromDate
+    )
+
+    // 计算每个 key 的 pipeline 命令数
+    let commandsPerKey = 0
+    for (const item of queryPlan) {
+      commandsPerKey += item.type === 'hourly' ? 2 : 3
+    }
+
+    // Step 3: 用 pipeline 批量查询所有 key 的用量
+    const keyIds = Object.keys(resolvedKeys)
+    const pipeline = client.pipeline()
+
+    for (const keyId of keyIds) {
+      for (const item of queryPlan) {
+        if (item.type === 'hourly') {
+          const hourStr = `${item.date}:${String(item.hour).padStart(2, '0')}`
+          pipeline.hgetall(`usage:hourly:${keyId}:${hourStr}`)
+          pipeline.get(`usage:cost:hourly:${keyId}:${hourStr}`)
+        } else {
+          pipeline.hgetall(`usage:daily:${keyId}:${item.date}`)
+          pipeline.get(`usage:cost:daily:${keyId}:${item.date}`)
+          pipeline.get(`usage:cost:real:daily:${keyId}:${item.date}`)
+        }
+      }
+    }
+
+    const results = keyIds.length > 0 && commandsPerKey > 0 ? await pipeline.exec() : []
+
+    // Step 4: 汇总
+    const keysResult = {}
+    const total = {
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreateTokens: 0,
+      cacheReadTokens: 0,
+      allTokens: 0,
+      cost: 0,
+      realCost: 0
+    }
+
+    for (let k = 0; k < keyIds.length; k++) {
+      const keyId = keyIds[k]
+      const baseOffset = k * commandsPerKey
+      let resultIdx = baseOffset
+      let dailyFallback = false
+
+      const keyStats = {
+        name: resolvedKeys[keyId],
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreateTokens: 0,
+        cacheReadTokens: 0,
+        allTokens: 0,
+        cost: 0,
+        realCost: 0
+      }
+
+      for (const item of queryPlan) {
+        if (item.type === 'hourly') {
+          const usage = results[resultIdx]?.[1] || {}
+          const cost = parseFloat(results[resultIdx + 1]?.[1] || 0)
+          keyStats.requests += parseInt(usage.requests || 0)
+          keyStats.inputTokens += parseInt(usage.inputTokens || 0)
+          keyStats.outputTokens += parseInt(usage.outputTokens || 0)
+          keyStats.cacheCreateTokens += parseInt(usage.cacheCreateTokens || 0)
+          keyStats.cacheReadTokens += parseInt(usage.cacheReadTokens || 0)
+          keyStats.allTokens += parseInt(usage.allTokens || 0)
+          keyStats.cost += cost
+          keyStats.realCost += cost // 小时级别无独立 realCost
+          resultIdx += 2
+        } else {
+          if (item.type === 'daily-fallback') dailyFallback = true
+          const usage = results[resultIdx]?.[1] || {}
+          const cost = parseFloat(results[resultIdx + 1]?.[1] || 0)
+          const realCost = parseFloat(results[resultIdx + 2]?.[1] || 0)
+          keyStats.requests += parseInt(usage.requests || 0)
+          keyStats.inputTokens += parseInt(usage.inputTokens || 0)
+          keyStats.outputTokens += parseInt(usage.outputTokens || 0)
+          keyStats.cacheCreateTokens += parseInt(usage.cacheCreateTokens || 0)
+          keyStats.cacheReadTokens += parseInt(usage.cacheReadTokens || 0)
+          keyStats.allTokens += parseInt(usage.allTokens || 0)
+          keyStats.cost += cost
+          keyStats.realCost += realCost
+          resultIdx += 3
+        }
+      }
+
+      keyStats.cost = Math.round(keyStats.cost * 100) / 100
+      keyStats.realCost = Math.round(keyStats.realCost * 100) / 100
+      keyStats.dailyFallback = dailyFallback
+      keysResult[keyId] = keyStats
+
+      total.requests += keyStats.requests
+      total.inputTokens += keyStats.inputTokens
+      total.outputTokens += keyStats.outputTokens
+      total.cacheCreateTokens += keyStats.cacheCreateTokens
+      total.cacheReadTokens += keyStats.cacheReadTokens
+      total.allTokens += keyStats.allTokens
+      total.cost += keyStats.cost
+      total.realCost += keyStats.realCost
+    }
+
+    total.cost = Math.round(total.cost * 100) / 100
+    total.realCost = Math.round(total.realCost * 100) / 100
+
+    return res.json({
+      success: true,
+      data: {
+        startTime: startTime || formatTimeInTimezone(startUTC, callerOffset),
+        endTime: endTime || formatTimeInTimezone(endUTC, callerOffset),
+        timezone,
+        keys: keysResult,
+        total,
+        notFound
+      }
+    })
+  } catch (error) {
+    logger.error('Failed to query key usage:', error)
     return res.status(500).json({
       success: false,
       message: error.message
