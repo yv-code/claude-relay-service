@@ -31,26 +31,38 @@ const myModule = require('../src/services/myModule')
 
 连接真实 Redis，通过 fixture 用项目自身的 service 层创建数据。
 
-### Redis 可用性保护
+### 环境变量控制与可见性
 
-Redis 不可用时必须自动跳过，不能导致 CI 失败：
+通过 `REDIS_TEST=1` 环境变量控制是否执行，使用 `it.skip` 让测试报告明确显示 **skipped**（而非静默 pass）：
 
 ```js
-let redisAvailable = false
+const skipRealRedis = !process.env.REDIS_TEST
 
 beforeAll(async () => {
+  if (skipRealRedis) {
+    console.log('⏭️  Skipping Redis integration tests (set REDIS_TEST=1 to enable)')
+    return
+  }
   try {
     await fixture.connectRedis()
-    redisAvailable = true
-    await fixture.setup()
+    // ...
   } catch (err) {
-    console.warn('Redis not available, skipping:', err.message)
+    console.warn('⚠️  Redis connection failed, tests will be skipped:', err.message)
   }
 })
 
-// 每个 test 开头检查
-if (!redisAvailable) return
+describe('my tests', () => {
+  const testOrSkip = skipRealRedis ? it.skip : it
+
+  testOrSkip('should do something', async () => {
+    // 真正的测试逻辑
+  })
+})
 ```
+
+这样：
+- `npm test` → 显示 `8 skipped`，外部 CI 可明确感知未执行
+- `REDIS_TEST=1 npm test` → 真正连接 Redis 执行测试
 
 ### mock 策略
 
@@ -118,8 +130,8 @@ usage:cost:real:daily:{keyId}:{date}     — 30 天过期
 ## 运行命令
 
 ```bash
-npm test                                    # 全部测试
-npm test -- agentKeyUsage                   # 按文件名匹配
-npm test -- agentKeyUsage.integration       # 只跑集成测试
-npm test -- --coverage                      # 覆盖率报告
+npm test                                                # 全部测试（集成测试显示 skipped）
+npm test -- agentKeyUsage                               # 按文件名匹配
+REDIS_TEST=1 npm test -- agentKeyUsage.integration      # 连接真实 Redis 跑集成测试
+npm test -- --coverage                                  # 覆盖率报告
 ```

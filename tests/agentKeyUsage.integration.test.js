@@ -4,8 +4,8 @@
  * 需要真实 Redis 连接。通过 fixture 使用项目自身的 redis model 创建数据，
  * 确保数据结构与生产环境完全一致。
  *
- * 运行: npm test -- agentKeyUsage.integration
- * 跳过: 未连接 Redis 时自动跳过
+ * 运行: REDIS_TEST=1 npm test -- agentKeyUsage.integration
+ * 不设 REDIS_TEST 时所有用例显示 skipped
  */
 
 const express = require('express')
@@ -65,13 +65,20 @@ jest.mock('../src/utils/logger', () => ({
 const fixture = require('./fixtures/keyUsageTestData')
 const { TEST_KEYS } = fixture
 
+const skipRealRedis = !process.env.REDIS_TEST
+
 let app
-let redisAvailable = false
+let redisConnected = false
 
 beforeAll(async () => {
+  if (skipRealRedis) {
+    console.log('⏭️  Skipping Redis integration tests (set REDIS_TEST=1 to enable)')
+    return
+  }
+
   try {
     await fixture.connectRedis()
-    redisAvailable = true
+    redisConnected = true
     await fixture.setup()
 
     const agentRouter = require('../src/routes/agent')
@@ -79,28 +86,21 @@ beforeAll(async () => {
     app.use(express.json())
     app.use('/agent', agentRouter)
   } catch (err) {
-    console.warn('⚠️  Redis not available, integration tests will be skipped:', err.message)
+    console.warn('⚠️  Redis connection failed, tests will be skipped:', err.message)
   }
 })
 
 afterAll(async () => {
-  if (redisAvailable) {
+  if (redisConnected) {
     await fixture.teardown()
     await fixture.disconnect()
   }
 })
 
-const skipIfNoRedis = () => {
-  if (!redisAvailable) {
-    return true
-  }
-  return false
-}
-
 describe('POST /agent/keys/usage (integration)', () => {
-  it('should query full-day usage by keyId', async () => {
-    if (skipIfNoRedis()) return
+  const testOrSkip = skipRealRedis ? it.skip : it
 
+  testOrSkip('should query full-day usage by keyId', async () => {
     const res = await request(app)
       .post('/agent/keys/usage')
       .send({
@@ -129,9 +129,7 @@ describe('POST /agent/keys/usage (integration)', () => {
     expect(keyData.dailyFallback).toBe(false)
   })
 
-  it('should query partial-day hourly range', async () => {
-    if (skipIfNoRedis()) return
-
+  testOrSkip('should query partial-day hourly range', async () => {
     const res = await request(app)
       .post('/agent/keys/usage')
       .send({
@@ -147,9 +145,7 @@ describe('POST /agent/keys/usage (integration)', () => {
     expect(keyData.cost).toBe(3)
   })
 
-  it('should aggregate across multiple keys', async () => {
-    if (skipIfNoRedis()) return
-
+  testOrSkip('should aggregate across multiple keys', async () => {
     const res = await request(app)
       .post('/agent/keys/usage')
       .send({
@@ -166,9 +162,7 @@ describe('POST /agent/keys/usage (integration)', () => {
     expect(total.cost).toBe(12.5)
   })
 
-  it('should resolve key by name via index', async () => {
-    if (skipIfNoRedis()) return
-
+  testOrSkip('should resolve key by name via index', async () => {
     const res = await request(app)
       .post('/agent/keys/usage')
       .send({
@@ -183,9 +177,7 @@ describe('POST /agent/keys/usage (integration)', () => {
     expect(res.body.data.notFound).toEqual([])
   })
 
-  it('should report unresolved keys in notFound', async () => {
-    if (skipIfNoRedis()) return
-
+  testOrSkip('should report unresolved keys in notFound', async () => {
     const res = await request(app)
       .post('/agent/keys/usage')
       .send({
@@ -199,9 +191,7 @@ describe('POST /agent/keys/usage (integration)', () => {
     expect(res.body.data.keys[TEST_KEYS.key1.id]).toBeDefined()
   })
 
-  it('should query multi-day range with daily + hourly', async () => {
-    if (skipIfNoRedis()) return
-
+  testOrSkip('should query multi-day range with daily + hourly', async () => {
     const res = await request(app)
       .post('/agent/keys/usage')
       .send({
@@ -220,9 +210,7 @@ describe('POST /agent/keys/usage (integration)', () => {
     expect(keyData.realCost).toBe(13.75)
   })
 
-  it('should return zeroes for a key with no usage in range', async () => {
-    if (skipIfNoRedis()) return
-
+  testOrSkip('should return zeroes for a key with no usage in range', async () => {
     const res = await request(app)
       .post('/agent/keys/usage')
       .send({
@@ -237,9 +225,7 @@ describe('POST /agent/keys/usage (integration)', () => {
     expect(keyData.cost).toBe(0)
   })
 
-  it('should include correct response metadata', async () => {
-    if (skipIfNoRedis()) return
-
+  testOrSkip('should include correct response metadata', async () => {
     const res = await request(app)
       .post('/agent/keys/usage')
       .send({
