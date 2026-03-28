@@ -12,44 +12,53 @@ const azureOpenaiAccountService = require('../../services/account/azureOpenaiAcc
 const droidAccountService = require('../../services/account/droidAccountService')
 const redis = require('../../models/redis')
 const logger = require('../../utils/logger')
+const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 
 const router = express.Router()
 
 // 平台到获取函数的映射
+// accountType: 对应 upstreamErrorHelper 中 temp_unavailable 键使用的类型标识
 const PLATFORM_FETCHERS = {
   claude: {
     fetch: () => claudeAccountService.getAllAccounts(),
     getOne: (id) => claudeAccountService.getAccount(id),
+    accountType: 'claude-official',
     opts: {}
   },
   'claude-console': {
     fetch: () => claudeConsoleAccountService.getAllAccounts(),
     getOne: (id) => claudeConsoleAccountService.getAccount(id),
+    accountType: 'claude-console',
     opts: {}
   },
   gemini: {
     fetch: () => geminiAccountService.getAllAccounts(),
     getOne: (id) => geminiAccountService.getAccount(id),
+    accountType: 'gemini',
     opts: { checkGeminiRateLimit: true }
   },
   'gemini-api': {
     fetch: () => geminiApiAccountService.getAllAccounts(true),
     getOne: (id) => geminiApiAccountService.getAccount(id),
+    accountType: 'gemini-api',
     opts: { isStringType: true }
   },
   openai: {
     fetch: () => openaiAccountService.getAllAccounts(),
     getOne: (id) => openaiAccountService.getAccount(id),
+    accountType: 'openai',
     opts: { isStringType: true }
   },
   'openai-responses': {
     fetch: () => openaiResponsesAccountService.getAllAccounts(true),
     getOne: (id) => openaiResponsesAccountService.getAccount(id),
+    accountType: 'openai-responses',
     opts: { isStringType: true }
   },
   'azure-openai': {
     fetch: () => azureOpenaiAccountService.getAllAccounts(),
     getOne: (id) => azureOpenaiAccountService.getAccount(id),
+    accountType: 'azure-openai',
     opts: { isStringType: true }
   },
   bedrock: {
@@ -61,16 +70,19 @@ const PLATFORM_FETCHERS = {
       const result = await bedrockAccountService.getAccount(id)
       return result.success ? result.data : null
     },
+    accountType: 'bedrock',
     opts: {}
   },
   droid: {
     fetch: () => droidAccountService.getAllAccounts(),
     getOne: (id) => droidAccountService.getAccount(id),
+    accountType: 'droid',
     opts: { isDroid: true }
   },
   ccr: {
     fetch: () => ccrAccountService.getAllAccounts(),
     getOne: (id) => ccrAccountService.getAccount(id),
+    accountType: 'ccr',
     opts: {}
   }
 }
@@ -79,14 +91,21 @@ const PLATFORM_FETCHERS = {
 const normalizeBoolean = (value) => value === true || value === 'true'
 
 const isRateLimitedFlag = (status) => {
-  if (!status) return false
-  if (typeof status === 'string') return status === 'limited'
-  if (typeof status === 'object') return status.isRateLimited === true
+  if (!status) {
+    return false
+  }
+  if (typeof status === 'string') {
+    return status === 'limited'
+  }
+  if (typeof status === 'object') {
+    return status.isRateLimited === true
+  }
   return false
 }
 
-// 账户状态分类（与 dashboard.js countAccountStats 一致）
-const classifyAccount = (acc, opts = {}) => {
+// 账户状态分类（扩展自 dashboard.js countAccountStats）
+// tempUnavailableInfo: 来自 upstreamErrorHelper.getAllTempUnavailable() 的临时不可用信息
+const classifyAccount = (acc, opts = {}, tempUnavailableInfo = null) => {
   const { isStringType = false, checkGeminiRateLimit = false, isDroid = false } = opts
 
   const isActive = isDroid
@@ -107,9 +126,18 @@ const classifyAccount = (acc, opts = {}) => {
       (acc.rateLimitStatus && acc.rateLimitStatus.isRateLimited)
     : isRateLimitedFlag(acc.rateLimitStatus)
 
-  if (!isActive || isBlocked) return 'abnormal'
-  if (!isSchedulable) return 'paused'
-  if (isRateLimited) return 'rateLimited'
+  if (!isActive || isBlocked) {
+    return 'abnormal'
+  }
+  if (!isSchedulable) {
+    return 'paused'
+  }
+  if (tempUnavailableInfo) {
+    return 'tempUnavailable'
+  }
+  if (isRateLimited) {
+    return 'rateLimited'
+  }
   return 'normal'
 }
 
@@ -215,18 +243,34 @@ router.get('/accounts/status', authenticateAgentToken, async (req, res) => {
       })
     }
 
-    const accounts = await fetcher.fetch()
-    const stats = { normal: 0, abnormal: 0, paused: 0, rateLimited: 0 }
+    const [accounts, allTempUnavailable] = await Promise.all([
+      fetcher.fetch(),
+      upstreamErrorHelper.getAllTempUnavailable()
+    ])
+    const stats = { normal: 0, abnormal: 0, paused: 0, rateLimited: 0, tempUnavailable: 0 }
     const accountSummaries = []
 
     for (const acc of accounts) {
-      const classification = classifyAccount(acc, fetcher.opts)
+      const tuKey = `${fetcher.accountType}:${acc.id}`
+      const tuInfo = allTempUnavailable[tuKey] || null
+      const classification = classifyAccount(acc, fetcher.opts, tuInfo)
       stats[classification]++
 
-      accountSummaries.push({
+      const summary = {
         ...sanitizeAccount(acc),
         _classification: classification
-      })
+      }
+      if (tuInfo) {
+        summary._tempUnavailable = {
+          statusCode: tuInfo.statusCode,
+          errorType: tuInfo.errorType,
+          markedAt: tuInfo.markedAt,
+          remainingSeconds: tuInfo.remainingSeconds,
+          cooldownSeconds: tuInfo.cooldownSeconds,
+          expiresAt: tuInfo.expiresAt
+        }
+      }
+      accountSummaries.push(summary)
     }
 
     return res.json({
@@ -274,17 +318,34 @@ router.get('/accounts/:id', authenticateAgentToken, async (req, res) => {
       })
     }
 
-    const classification = classifyAccount(account, matchedOpts)
+    const matchedFetcher = PLATFORM_FETCHERS[matchedPlatform]
+    const allTempUnavailable = await upstreamErrorHelper.getAllTempUnavailable()
+    const tuKey = `${matchedFetcher.accountType}:${id}`
+    const tuInfo = allTempUnavailable[tuKey] || null
+
+    const classification = classifyAccount(account, matchedOpts, tuInfo)
     const usage = await redis.getAccountUsageStats(id)
+
+    const accountData = {
+      ...sanitizeAccount(account),
+      _classification: classification
+    }
+    if (tuInfo) {
+      accountData._tempUnavailable = {
+        statusCode: tuInfo.statusCode,
+        errorType: tuInfo.errorType,
+        markedAt: tuInfo.markedAt,
+        remainingSeconds: tuInfo.remainingSeconds,
+        cooldownSeconds: tuInfo.cooldownSeconds,
+        expiresAt: tuInfo.expiresAt
+      }
+    }
 
     return res.json({
       success: true,
       data: {
         platform: matchedPlatform,
-        account: {
-          ...sanitizeAccount(account),
-          _classification: classification
-        },
+        account: accountData,
         usage
       }
     })
