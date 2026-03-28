@@ -102,8 +102,12 @@ data/init.json            # 管理员凭据
 
 ### 测试规范
 
-- 测试文件在 `tests/` 目录，命名 `*.test.js` 或 `*.spec.js`
-- 使用 `jest.mock()` 模拟依赖（logger、redis、services）
+详细规范见 [`tests/TESTING.md`](tests/TESTING.md)，以下为要点：
+
+- 测试文件在 `tests/` 目录，单元测试 `*.test.js`，集成测试 `*.integration.test.js`
+- 单元测试：`jest.mock()` 模拟所有外部依赖（logger、redis、services）
+- 集成测试：连接真实 Redis，通过 `tests/fixtures/` 下的 fixture 用项目 service 层创建数据（不手写 Redis 命令）
+- 集成测试必须在 Redis 不可用时自动跳过
 - `beforeEach` 中 `jest.resetModules()`，`afterEach` 中 `jest.clearAllMocks()`
 
 ### 前端要求
