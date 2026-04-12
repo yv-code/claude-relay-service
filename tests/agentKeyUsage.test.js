@@ -107,6 +107,10 @@ describe('POST /agent/keys/usage', () => {
     app = buildApp()
   })
 
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
   // --- 参数校验 ---
 
   it('should return 400 when neither keys nor tag is provided', async () => {
@@ -267,6 +271,10 @@ describe('POST /agent/keys/usage', () => {
   // --- 用量查询与汇总 ---
 
   it('should aggregate same-day hourly usage for a single key', async () => {
+    // 冻结系统时间到测试数据日期附近，确保 2026-03-28 落在路由的 7 天
+    // hourly 保留窗口内（否则 buildQueryPlan 会回退到 daily-fallback）
+    jest.useFakeTimers().setSystemTime(new Date('2026-03-30T12:00:00Z'))
+
     // key1 resolved by id
     const idPipeline = createMockPipeline([[null, 'TestKey']])
 

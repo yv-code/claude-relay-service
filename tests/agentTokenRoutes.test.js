@@ -287,7 +287,8 @@ describe('Agent Routes', () => {
       const res = await request(app).get('/agent/accounts/status')
 
       expect(res.status).toBe(400)
-      expect(res.body.error).toBe('Missing platform parameter')
+      expect(res.body.success).toBe(false)
+      expect(res.body.message).toBe('Please specify a platform')
       expect(res.body.availablePlatforms).toBeDefined()
     })
 
@@ -296,7 +297,8 @@ describe('Agent Routes', () => {
       const res = await request(app).get('/agent/accounts/status?platform=invalid')
 
       expect(res.status).toBe(400)
-      expect(res.body.error).toBe('Invalid platform')
+      expect(res.body.success).toBe(false)
+      expect(res.body.message).toBe('Unknown platform: invalid')
       expect(res.body.availablePlatforms).toBeDefined()
     })
 
@@ -305,7 +307,7 @@ describe('Agent Routes', () => {
       const res = await request(app).get('/agent/accounts/status?platform=claude')
 
       expect(res.status).toBe(200)
-      const accounts = res.body.data.accounts
+      const { accounts } = res.body.data
       for (const acc of accounts) {
         expect(acc).not.toHaveProperty('accessToken')
         expect(acc).not.toHaveProperty('refreshToken')
@@ -319,7 +321,7 @@ describe('Agent Routes', () => {
       const app = buildApp()
       const res = await request(app).get('/agent/accounts/status?platform=claude')
 
-      const accounts = res.body.data.accounts
+      const { accounts } = res.body.data
       expect(accounts[0]._classification).toBe('normal')
       expect(accounts[1]._classification).toBe('abnormal')
       expect(accounts[2]._classification).toBe('paused')
