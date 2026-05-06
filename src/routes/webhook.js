@@ -125,6 +125,16 @@ router.post('/test', authenticateAdmin, async (req, res) => {
       level,
       sound,
       group,
+      topic,
+      priority,
+      tags,
+      accessToken,
+      username,
+      password,
+      icon,
+      clickUrl,
+      noCache,
+      markdown,
       // SMTP 相关字段
       host,
       port,
@@ -162,6 +172,32 @@ router.post('/test', authenticateAdmin, async (req, res) => {
       }
 
       logger.info(`🧪 测试webhook: ${type} - Device Key: ${deviceKey.substring(0, 8)}...`)
+    } else if (type === 'ntfy') {
+      if (!topic) {
+        return res.status(400).json({
+          error: 'Missing ntfy topic',
+          message: '请提供 ntfy Topic'
+        })
+      }
+
+      if (serverUrl) {
+        try {
+          const parsed = new URL(serverUrl)
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            return res.status(400).json({
+              error: 'Invalid ntfy server url protocol',
+              message: 'ntfy服务器地址仅支持 http 或 https'
+            })
+          }
+        } catch (urlError) {
+          return res.status(400).json({
+            error: 'Invalid ntfy server URL format',
+            message: '请提供有效的ntfy服务器地址'
+          })
+        }
+      }
+
+      logger.info(`🧪 测试webhook: ${type} - Topic: ${topic}`)
     } else if (type === 'smtp') {
       // SMTP平台验证
       if (!host) {
@@ -279,6 +315,18 @@ router.post('/test', authenticateAdmin, async (req, res) => {
       platform.level = level
       platform.sound = sound
       platform.group = group
+    } else if (type === 'ntfy') {
+      platform.topic = topic
+      platform.serverUrl = serverUrl
+      platform.priority = priority
+      platform.tags = tags
+      platform.accessToken = accessToken
+      platform.username = username
+      platform.password = password
+      platform.icon = icon
+      platform.clickUrl = clickUrl
+      platform.noCache = noCache
+      platform.markdown = markdown
     } else if (type === 'smtp') {
       // 添加SMTP特有字段
       platform.host = host
@@ -296,11 +344,23 @@ router.post('/test', authenticateAdmin, async (req, res) => {
       platform.proxyUrl = proxyUrl
     }
 
+    try {
+      webhookConfigService.validatePlatformConfig(platform)
+    } catch (validationError) {
+      return res.status(400).json({
+        error: 'Invalid webhook platform config',
+        message: validationError.message
+      })
+    }
+
     const result = await webhookService.testWebhook(platform)
 
     const identifier = (() => {
       if (type === 'bark') {
         return `Device: ${deviceKey.substring(0, 8)}...`
+      }
+      if (type === 'ntfy') {
+        return `Topic: ${topic}`
       }
       if (type === 'smtp') {
         const recipients = Array.isArray(to) ? to.join(', ') : to

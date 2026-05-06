@@ -580,11 +580,38 @@
                     </div>
                     <div class="mt-3 space-y-1 text-sm">
                       <div
-                        v-if="platform.type !== 'smtp' && platform.type !== 'telegram'"
+                        v-if="
+                          platform.type !== 'smtp' &&
+                          platform.type !== 'telegram' &&
+                          platform.type !== 'ntfy'
+                        "
                         class="flex items-center text-gray-600 dark:text-gray-400"
                       >
                         <i class="fas fa-link mr-2"></i>
                         <span class="truncate">{{ platform.url }}</span>
+                      </div>
+                      <div
+                        v-if="platform.type === 'ntfy'"
+                        class="flex items-center text-gray-600 dark:text-gray-400"
+                      >
+                        <i class="fas fa-hashtag mr-2"></i>
+                        <span class="truncate">Topic: {{ platform.topic || '未配置' }}</span>
+                      </div>
+                      <div
+                        v-if="platform.type === 'ntfy' && platform.serverUrl"
+                        class="flex items-center text-gray-600 dark:text-gray-400"
+                      >
+                        <i class="fas fa-server mr-2"></i>
+                        <span class="truncate">Server: {{ platform.serverUrl }}</span>
+                      </div>
+                      <div
+                        v-if="platform.type === 'ntfy' && platform.accessToken"
+                        class="flex items-center text-gray-600 dark:text-gray-400"
+                      >
+                        <i class="fas fa-key mr-2"></i>
+                        <span class="truncate"
+                          >Token: {{ formatSecret(platform.accessToken) }}</span
+                        >
                       </div>
                       <div
                         v-if="platform.type === 'telegram'"
@@ -1464,6 +1491,7 @@
                 <option value="discord">🟪 Discord</option>
                 <option value="telegram">✈️ Telegram</option>
                 <option value="bark">🔔 Bark</option>
+                <option value="ntfy">📣 ntfy</option>
                 <option value="smtp">📧 邮件通知</option>
                 <option value="custom">⚙️ 自定义</option>
               </select>
@@ -1498,6 +1526,7 @@
           <div
             v-if="
               platformForm.type !== 'bark' &&
+              platformForm.type !== 'ntfy' &&
               platformForm.type !== 'smtp' &&
               platformForm.type !== 'telegram'
             "
@@ -1625,6 +1654,193 @@
             >
               <i class="fas fa-info-circle mr-2 mt-0.5"></i>
               <div>机器人需先加入对应群组或频道并授予发送消息权限，通知会以纯文本方式发送。</div>
+            </div>
+          </div>
+
+          <!-- ntfy 平台特有字段 -->
+          <div v-if="platformForm.type === 'ntfy'" class="space-y-5">
+            <div>
+              <label
+                class="mb-2 flex items-center text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                <i class="fas fa-hashtag mr-2 text-gray-400"></i>
+                Topic
+                <span class="ml-1 text-xs text-red-500">*</span>
+              </label>
+              <input
+                v-model="platformForm.topic"
+                class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 font-mono text-sm text-gray-900 shadow-sm transition-all placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                placeholder="例如：claude-relay-alerts"
+                required
+                type="text"
+              />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                ntfy 的订阅主题名，建议使用不容易猜到的随机字符串
+              </p>
+            </div>
+
+            <div>
+              <label
+                class="mb-2 flex items-center text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                <i class="fas fa-server mr-2 text-gray-400"></i>
+                服务器地址
+                <span class="ml-2 text-xs text-gray-500">(可选)</span>
+              </label>
+              <input
+                v-model="platformForm.serverUrl"
+                class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 font-mono text-sm text-gray-900 shadow-sm transition-all placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                placeholder="默认: https://ntfy.sh"
+                type="url"
+              />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                使用自建 ntfy 时填写服务根地址，例如 https://ntfy.example.com
+              </p>
+            </div>
+
+            <div>
+              <label
+                class="mb-2 flex items-center text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                <i class="fas fa-flag mr-2 text-gray-400"></i>
+                优先级
+              </label>
+              <select
+                v-model="platformForm.priority"
+                class="w-full appearance-none rounded-xl border border-gray-300 bg-white px-4 py-3 pr-10 text-gray-900 shadow-sm transition-all focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">自动（根据通知类型）</option>
+                <option value="min">最低</option>
+                <option value="low">低</option>
+                <option value="default">默认</option>
+                <option value="high">高</option>
+                <option value="urgent">紧急</option>
+              </select>
+            </div>
+
+            <div>
+              <label
+                class="mb-2 flex items-center text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                <i class="fas fa-tags mr-2 text-gray-400"></i>
+                标签
+                <span class="ml-2 text-xs text-gray-500">(可选)</span>
+              </label>
+              <input
+                v-model="platformForm.tags"
+                class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-gray-900 shadow-sm transition-all placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                placeholder="例如：warning,robot"
+                type="text"
+              />
+            </div>
+
+            <div>
+              <label
+                class="mb-2 flex items-center text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                <i class="fas fa-key mr-2 text-gray-400"></i>
+                Access Token
+                <span class="ml-2 text-xs text-gray-500">(可选)</span>
+              </label>
+              <input
+                v-model="platformForm.accessToken"
+                class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 font-mono text-sm text-gray-900 shadow-sm transition-all placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                placeholder="tk_..."
+                type="password"
+              />
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label
+                  class="mb-2 flex items-center text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  <i class="fas fa-user mr-2 text-gray-400"></i>
+                  用户名
+                  <span class="ml-2 text-xs text-gray-500">(可选)</span>
+                </label>
+                <input
+                  v-model="platformForm.username"
+                  class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-gray-900 shadow-sm transition-all placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                  placeholder="Basic认证用户名"
+                  type="text"
+                />
+              </div>
+              <div>
+                <label
+                  class="mb-2 flex items-center text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  <i class="fas fa-lock mr-2 text-gray-400"></i>
+                  密码
+                  <span class="ml-2 text-xs text-gray-500">(可选)</span>
+                </label>
+                <input
+                  v-model="platformForm.password"
+                  class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-gray-900 shadow-sm transition-all placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                  placeholder="Basic认证密码"
+                  type="password"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                class="mb-2 flex items-center text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                <i class="fas fa-external-link-alt mr-2 text-gray-400"></i>
+                点击跳转URL
+                <span class="ml-2 text-xs text-gray-500">(可选)</span>
+              </label>
+              <input
+                v-model="platformForm.clickUrl"
+                class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 font-mono text-sm text-gray-900 shadow-sm transition-all placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                placeholder="https://..."
+                type="url"
+              />
+            </div>
+
+            <div>
+              <label
+                class="mb-2 flex items-center text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                <i class="fas fa-image mr-2 text-gray-400"></i>
+                图标URL
+                <span class="ml-2 text-xs text-gray-500">(可选)</span>
+              </label>
+              <input
+                v-model="platformForm.icon"
+                class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 font-mono text-sm text-gray-900 shadow-sm transition-all placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                placeholder="https://..."
+                type="url"
+              />
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label class="flex cursor-pointer items-center">
+                <input
+                  v-model="platformForm.markdown"
+                  class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  type="checkbox"
+                />
+                <span class="ml-3 text-sm text-gray-700 dark:text-gray-300">启用Markdown</span>
+              </label>
+              <label class="flex cursor-pointer items-center">
+                <input
+                  v-model="platformForm.noCache"
+                  class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  type="checkbox"
+                />
+                <span class="ml-3 text-sm text-gray-700 dark:text-gray-300">不缓存消息</span>
+              </label>
+            </div>
+
+            <div
+              class="flex items-start rounded-lg bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-300"
+            >
+              <i class="fas fa-info-circle mr-2 mt-0.5"></i>
+              <div>
+                客户端订阅同一个 Topic 后即可接收推送；公开 ntfy.sh 的 Topic 请避免使用易猜名称。
+              </div>
             </div>
           </div>
 
@@ -2254,6 +2470,17 @@ const platformForm = ref({
   level: '',
   sound: '',
   group: '',
+  // ntfy特有字段
+  topic: '',
+  priority: '',
+  tags: '',
+  accessToken: '',
+  username: '',
+  password: '',
+  icon: '',
+  clickUrl: '',
+  noCache: false,
+  markdown: false,
   // SMTP特有字段
   host: '',
   port: null,
@@ -2289,7 +2516,7 @@ const platformTypeWatcher = watch(
     // 如果不是编辑模式，清空相关字段
     if (!editingPlatform.value) {
       if (newType === 'bark') {
-        // 切换到Bark时，清空URL和SMTP相关字段
+        // 切换到Bark时，清空URL、ntfy和SMTP相关字段
         platformForm.value.url = ''
         platformForm.value.enableSign = false
         platformForm.value.secret = ''
@@ -2308,8 +2535,42 @@ const platformTypeWatcher = watch(
         platformForm.value.to = ''
         platformForm.value.timeout = null
         platformForm.value.ignoreTLS = false
+        // 清空ntfy字段
+        platformForm.value.serverUrl = ''
+        platformForm.value.topic = ''
+        platformForm.value.priority = ''
+        platformForm.value.tags = ''
+        platformForm.value.accessToken = ''
+        platformForm.value.username = ''
+        platformForm.value.password = ''
+        platformForm.value.icon = ''
+        platformForm.value.clickUrl = ''
+        platformForm.value.noCache = false
+        platformForm.value.markdown = false
+      } else if (newType === 'ntfy') {
+        platformForm.value.url = ''
+        platformForm.value.enableSign = false
+        platformForm.value.secret = ''
+        platformForm.value.deviceKey = ''
+        platformForm.value.serverUrl = ''
+        platformForm.value.level = ''
+        platformForm.value.sound = ''
+        platformForm.value.group = ''
+        platformForm.value.botToken = ''
+        platformForm.value.chatId = ''
+        platformForm.value.apiBaseUrl = ''
+        platformForm.value.proxyUrl = ''
+        platformForm.value.host = ''
+        platformForm.value.port = null
+        platformForm.value.secure = false
+        platformForm.value.user = ''
+        platformForm.value.pass = ''
+        platformForm.value.from = ''
+        platformForm.value.to = ''
+        platformForm.value.timeout = null
+        platformForm.value.ignoreTLS = false
       } else if (newType === 'smtp') {
-        // 切换到SMTP时，清空URL和Bark相关字段
+        // 切换到SMTP时，清空URL、Bark和ntfy相关字段
         platformForm.value.url = ''
         platformForm.value.enableSign = false
         platformForm.value.secret = ''
@@ -2324,6 +2585,17 @@ const platformTypeWatcher = watch(
         platformForm.value.chatId = ''
         platformForm.value.apiBaseUrl = ''
         platformForm.value.proxyUrl = ''
+        // 清空ntfy字段
+        platformForm.value.topic = ''
+        platformForm.value.priority = ''
+        platformForm.value.tags = ''
+        platformForm.value.accessToken = ''
+        platformForm.value.username = ''
+        platformForm.value.password = ''
+        platformForm.value.icon = ''
+        platformForm.value.clickUrl = ''
+        platformForm.value.noCache = false
+        platformForm.value.markdown = false
       } else if (newType === 'telegram') {
         platformForm.value.url = ''
         platformForm.value.enableSign = false
@@ -2346,8 +2618,18 @@ const platformTypeWatcher = watch(
         platformForm.value.chatId = ''
         platformForm.value.apiBaseUrl = ''
         platformForm.value.proxyUrl = ''
+        platformForm.value.topic = ''
+        platformForm.value.priority = ''
+        platformForm.value.tags = ''
+        platformForm.value.accessToken = ''
+        platformForm.value.username = ''
+        platformForm.value.password = ''
+        platformForm.value.icon = ''
+        platformForm.value.clickUrl = ''
+        platformForm.value.noCache = false
+        platformForm.value.markdown = false
       } else {
-        // 切换到其他平台时，清空Bark和SMTP相关字段
+        // 切换到其他平台时，清空Bark、ntfy和SMTP相关字段
         platformForm.value.deviceKey = ''
         platformForm.value.serverUrl = ''
         platformForm.value.level = ''
@@ -2368,6 +2650,17 @@ const platformTypeWatcher = watch(
         platformForm.value.chatId = ''
         platformForm.value.apiBaseUrl = ''
         platformForm.value.proxyUrl = ''
+        // ntfy 字段
+        platformForm.value.topic = ''
+        platformForm.value.priority = ''
+        platformForm.value.tags = ''
+        platformForm.value.accessToken = ''
+        platformForm.value.username = ''
+        platformForm.value.password = ''
+        platformForm.value.icon = ''
+        platformForm.value.clickUrl = ''
+        platformForm.value.noCache = false
+        platformForm.value.markdown = false
       }
     }
   }
@@ -2378,6 +2671,8 @@ const isPlatformFormValid = computed(() => {
   if (platformForm.value.type === 'bark') {
     // Bark平台需要deviceKey
     return !!platformForm.value.deviceKey
+  } else if (platformForm.value.type === 'ntfy') {
+    return !!platformForm.value.topic
   } else if (platformForm.value.type === 'telegram') {
     // Telegram需要机器人Token和Chat ID
     return !!(platformForm.value.botToken && platformForm.value.chatId)
@@ -2701,7 +2996,7 @@ const getServiceName = (service) => {
 // 验证 URL
 const validateUrl = () => {
   // Bark和SMTP平台不需要验证URL
-  if (['bark', 'smtp', 'telegram'].includes(platformForm.value.type)) {
+  if (['bark', 'ntfy', 'smtp', 'telegram'].includes(platformForm.value.type)) {
     urlError.value = false
     urlValid.value = false
     return
@@ -2735,6 +3030,50 @@ const validatePlatformForm = () => {
     if (!platformForm.value.deviceKey) {
       showToast('请输入Bark设备密钥', 'error')
       return false
+    }
+  } else if (platformForm.value.type === 'ntfy') {
+    if (!platformForm.value.topic) {
+      showToast('请输入 ntfy Topic', 'error')
+      return false
+    }
+    if (/[\s/?#]/.test(platformForm.value.topic)) {
+      showToast('ntfy Topic 不能包含空白、斜杠或URL特殊分隔符', 'error')
+      return false
+    }
+    if (platformForm.value.serverUrl) {
+      try {
+        const parsed = new URL(platformForm.value.serverUrl)
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          showToast('ntfy服务器地址仅支持 http 或 https', 'error')
+          return false
+        }
+      } catch (error) {
+        showToast('请输入有效的 ntfy 服务器地址', 'error')
+        return false
+      }
+    }
+    if (
+      (platformForm.value.username && !platformForm.value.password) ||
+      (!platformForm.value.username && platformForm.value.password)
+    ) {
+      showToast('ntfy Basic认证需同时填写用户名和密码', 'error')
+      return false
+    }
+    if (platformForm.value.clickUrl) {
+      try {
+        new URL(platformForm.value.clickUrl)
+      } catch (error) {
+        showToast('请输入有效的 ntfy 点击跳转URL', 'error')
+        return false
+      }
+    }
+    if (platformForm.value.icon) {
+      try {
+        new URL(platformForm.value.icon)
+      } catch (error) {
+        showToast('请输入有效的 ntfy 图标URL', 'error')
+        return false
+      }
     }
   } else if (platformForm.value.type === 'telegram') {
     if (!platformForm.value.botToken) {
@@ -2860,6 +3199,17 @@ const editPlatform = (platform) => {
     level: platform.level || '',
     sound: platform.sound || '',
     group: platform.group || '',
+    // ntfy特有字段
+    topic: platform.topic || '',
+    priority: platform.priority || '',
+    tags: Array.isArray(platform.tags) ? platform.tags.join(', ') : platform.tags || '',
+    accessToken: platform.accessToken || '',
+    username: platform.username || '',
+    password: platform.password || '',
+    icon: platform.icon || '',
+    clickUrl: platform.clickUrl || '',
+    noCache: platform.noCache || false,
+    markdown: platform.markdown || false,
     // SMTP特有字段
     host: platform.host || '',
     port: platform.port ?? null,
@@ -2936,6 +3286,18 @@ const testPlatform = async (platform) => {
       testData.level = platform.level
       testData.sound = platform.sound
       testData.group = platform.group
+    } else if (platform.type === 'ntfy') {
+      testData.topic = platform.topic
+      testData.serverUrl = platform.serverUrl
+      testData.priority = platform.priority
+      testData.tags = platform.tags
+      testData.accessToken = platform.accessToken
+      testData.username = platform.username
+      testData.password = platform.password
+      testData.icon = platform.icon
+      testData.clickUrl = platform.clickUrl
+      testData.noCache = platform.noCache
+      testData.markdown = platform.markdown
     } else if (platform.type === 'smtp') {
       testData.host = platform.host
       testData.port = platform.port
@@ -3043,6 +3405,17 @@ const closePlatformModal = () => {
       level: '',
       sound: '',
       group: '',
+      // ntfy特有字段
+      topic: '',
+      priority: '',
+      tags: '',
+      accessToken: '',
+      username: '',
+      password: '',
+      icon: '',
+      clickUrl: '',
+      noCache: false,
+      markdown: false,
       // SMTP特有字段
       host: '',
       port: null,
@@ -3071,6 +3444,7 @@ const getPlatformName = (type) => {
     discord: 'Discord',
     telegram: 'Telegram',
     bark: 'Bark',
+    ntfy: 'ntfy',
     smtp: '邮件通知',
     custom: '自定义'
   }
@@ -3086,6 +3460,7 @@ const getPlatformIcon = (type) => {
     discord: 'fab fa-discord text-indigo-600',
     telegram: 'fab fa-telegram-plane text-sky-500',
     bark: 'fas fa-bell text-orange-500',
+    ntfy: 'fas fa-bullhorn text-green-600',
     smtp: 'fas fa-envelope text-blue-600',
     custom: 'fas fa-webhook text-gray-600'
   }
@@ -3101,6 +3476,7 @@ const getWebhookHint = (type) => {
     discord: '请在Discord服务器的集成设置中创建Webhook',
     telegram: '使用 @BotFather 创建机器人并复制 Token，Chat ID 可通过 @userinfobot 或相关工具获取',
     bark: '请在Bark App中查看您的设备密钥',
+    ntfy: '填写 ntfy Topic，默认发布到 https://ntfy.sh，也可使用自建服务器',
     smtp: '请配置SMTP服务器信息，支持Gmail、QQ邮箱等',
     custom: '请输入完整的Webhook接收地址'
   }
@@ -3111,6 +3487,12 @@ const formatTelegramToken = (token) => {
   if (!token) return ''
   if (token.length <= 12) return token
   return `${token.slice(0, 6)}...${token.slice(-4)}`
+}
+
+const formatSecret = (secret) => {
+  if (!secret) return ''
+  if (secret.length <= 4) return '***'
+  return `***...${secret.slice(-4)}`
 }
 
 const getNotificationTypeName = (type) => {

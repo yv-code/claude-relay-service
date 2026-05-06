@@ -1,6 +1,9 @@
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const { v4: uuidv4 } = require('uuid')
+const { createEncryptor } = require('../utils/commonHelper')
+
+const encryptor = createEncryptor('webhook-config-salt')
 
 class WebhookConfigService {
   constructor() {
@@ -21,14 +24,15 @@ class WebhookConfigService {
 
       const storedConfig = JSON.parse(configStr)
       const defaultConfig = this.getDefaultConfig()
+      const config = this.decryptSensitiveConfig(storedConfig)
 
       // 合并默认通知类型，确保新增类型有默认值
-      storedConfig.notificationTypes = {
+      config.notificationTypes = {
         ...defaultConfig.notificationTypes,
-        ...(storedConfig.notificationTypes || {})
+        ...(config.notificationTypes || {})
       }
 
-      return storedConfig
+      return config
     } catch (error) {
       logger.error('获取webhook配置失败:', error)
       return this.getDefaultConfig()
@@ -53,7 +57,8 @@ class WebhookConfigService {
       // 添加更新时间
       config.updatedAt = new Date().toISOString()
 
-      await redis.client.set(this.DEFAULT_CONFIG_KEY, JSON.stringify(config))
+      const storedConfig = this.encryptSensitiveConfig(config)
+      await redis.client.set(this.DEFAULT_CONFIG_KEY, JSON.stringify(storedConfig))
       logger.info('✅ Webhook配置已保存')
 
       return config
@@ -82,6 +87,7 @@ class WebhookConfigService {
         'telegram',
         'custom',
         'bark',
+        'ntfy',
         'smtp'
       ]
 
@@ -90,8 +96,8 @@ class WebhookConfigService {
           throw new Error(`不支持的平台类型: ${platform.type}`)
         }
 
-        // Bark和SMTP平台不使用标准URL
-        if (!['bark', 'smtp', 'telegram'].includes(platform.type)) {
+        // Bark、ntfy、SMTP、Telegram平台不使用标准URL
+        if (!['bark', 'ntfy', 'smtp', 'telegram'].includes(platform.type)) {
           if (!platform.url || !this.isValidUrl(platform.url)) {
             throw new Error(`无效的webhook URL: ${platform.url}`)
           }
@@ -257,6 +263,60 @@ class WebhookConfigService {
           logger.warn('⚠️ Bark点击跳转URL格式可能不正确')
         }
         break
+      case 'ntfy': {
+        if (!platform.topic) {
+          throw new Error('ntfy平台必须提供Topic')
+        }
+
+        const topic = String(platform.topic).trim()
+        if (!topic || /[\s/?#]/.test(topic)) {
+          throw new Error('ntfy Topic 不能包含空白、斜杠或URL特殊分隔符')
+        }
+
+        if (platform.serverUrl) {
+          if (!this.isValidUrl(platform.serverUrl)) {
+            throw new Error('ntfy服务器地址格式无效')
+          }
+          const { protocol } = new URL(platform.serverUrl)
+          if (!['http:', 'https:'].includes(protocol)) {
+            throw new Error('ntfy服务器地址仅支持 http 或 https 协议')
+          }
+        }
+
+        if (platform.priority) {
+          const validPriorities = [
+            'min',
+            'low',
+            'default',
+            'high',
+            'urgent',
+            '1',
+            '2',
+            '3',
+            '4',
+            '5'
+          ]
+          if (!validPriorities.includes(String(platform.priority))) {
+            throw new Error(`无效的ntfy优先级: ${platform.priority}`)
+          }
+        }
+
+        if (
+          (platform.username && !platform.password) ||
+          (!platform.username && platform.password)
+        ) {
+          throw new Error('ntfy使用Basic认证时必须同时提供用户名和密码')
+        }
+
+        if (platform.clickUrl && !this.isValidUrl(platform.clickUrl)) {
+          throw new Error('ntfy点击跳转URL格式无效')
+        }
+
+        if (platform.icon && !this.isValidUrl(platform.icon)) {
+          throw new Error('ntfy图标URL格式无效')
+        }
+        break
+      }
       case 'smtp': {
         // 验证SMTP必需配置
         if (!platform.host) {
@@ -302,6 +362,44 @@ class WebhookConfigService {
         }
         break
       }
+    }
+  }
+
+  encryptSensitiveConfig(config) {
+    return {
+      ...config,
+      platforms: (config.platforms || []).map((platform) => this.encryptSensitivePlatform(platform))
+    }
+  }
+
+  decryptSensitiveConfig(config) {
+    return {
+      ...config,
+      platforms: (config.platforms || []).map((platform) => this.decryptSensitivePlatform(platform))
+    }
+  }
+
+  encryptSensitivePlatform(platform) {
+    if (platform.type !== 'ntfy') {
+      return { ...platform }
+    }
+
+    return {
+      ...platform,
+      accessToken: platform.accessToken ? encryptor.encrypt(platform.accessToken) : '',
+      password: platform.password ? encryptor.encrypt(platform.password) : ''
+    }
+  }
+
+  decryptSensitivePlatform(platform) {
+    if (platform.type !== 'ntfy') {
+      return { ...platform }
+    }
+
+    return {
+      ...platform,
+      accessToken: platform.accessToken ? encryptor.decrypt(platform.accessToken) : '',
+      password: platform.password ? encryptor.decrypt(platform.password) : ''
     }
   }
 

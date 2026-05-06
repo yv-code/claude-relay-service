@@ -19,6 +19,7 @@ class WebhookService {
       telegram: this.sendToTelegram.bind(this),
       custom: this.sendToCustom.bind(this),
       bark: this.sendToBark.bind(this),
+      ntfy: this.sendToNtfy.bind(this),
       smtp: this.sendToSMTP.bind(this)
     }
     this.timezone = appConfig.system.timezone || 'Asia/Shanghai'
@@ -278,6 +279,53 @@ class WebhookService {
 
     const url = platform.serverUrl || 'https://api.day.app/push'
     await this.sendHttpRequest(url, payload, platform.timeout || 10000)
+  }
+
+  /**
+   * ntfy 通知
+   */
+  async sendToNtfy(platform, type, data) {
+    if (!platform.topic) {
+      throw new Error('缺少 ntfy Topic')
+    }
+
+    const url = this.buildNtfyUrl(platform.serverUrl, platform.topic)
+    const headers = {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'User-Agent': 'claude-relay-service/2.0',
+      Title: this.encodeNtfyHeaderValue(this.getNotificationTitle(type)),
+      Priority: platform.priority || this.getNtfyPriority(type),
+      Tags: this.normalizeNtfyTags(platform.tags) || this.getNtfyTags(type)
+    }
+
+    if (platform.clickUrl) {
+      headers.Click = platform.clickUrl
+    }
+    if (platform.icon) {
+      headers.Icon = platform.icon
+    }
+    if (platform.noCache) {
+      headers.Cache = 'no'
+    }
+    if (platform.markdown) {
+      headers.Markdown = 'yes'
+    }
+    if (platform.accessToken) {
+      headers.Authorization = `Bearer ${platform.accessToken}`
+    } else if (platform.username && platform.password) {
+      headers.Authorization = `Basic ${Buffer.from(`${platform.username}:${platform.password}`).toString('base64')}`
+    }
+
+    const response = await axios.post(url, this.formatMessageForNtfy(type, data, platform), {
+      timeout: platform.timeout || 10000,
+      headers
+    })
+
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    return response.data
   }
 
   /**
@@ -620,6 +668,97 @@ class WebhookService {
     lines.push(`时间: ${new Date().toLocaleString('zh-CN', { timeZone: this.timezone })}`)
 
     return lines.join('\n')
+  }
+
+  /**
+   * 格式化ntfy消息
+   */
+  formatMessageForNtfy(type, data, platform = {}) {
+    const formattedDetails = this.formatNotificationDetails(data)
+    const details = platform.markdown ? formattedDetails : formattedDetails.replace(/\*\*/g, '')
+    const timestamp = new Date().toLocaleString('zh-CN', { timeZone: this.timezone })
+    const lines = []
+
+    if (details) {
+      lines.push(details)
+    } else {
+      lines.push(this.getNotificationTitle(type))
+    }
+
+    lines.push('', '服务: Claude Relay Service', `时间: ${timestamp}`)
+
+    return lines.join('\n')
+  }
+
+  /**
+   * 构建ntfy发布地址
+   */
+  buildNtfyUrl(serverUrl, topic) {
+    const baseUrl = (serverUrl || 'https://ntfy.sh').replace(/\/+$/, '')
+    const normalizedTopic = String(topic)
+      .trim()
+      .replace(/^\/+|\/+$/g, '')
+    return `${baseUrl}/${encodeURIComponent(normalizedTopic)}`
+  }
+
+  /**
+   * Node.js HTTP header 对非ASCII字符限制更严，ntfy支持RFC 2047编码的header值
+   */
+  encodeNtfyHeaderValue(value) {
+    const text = String(value || '')
+    if (!/[^\x20-\x7e]/.test(text)) {
+      return text
+    }
+    return `=?UTF-8?B?${Buffer.from(text, 'utf8').toString('base64')}?=`
+  }
+
+  /**
+   * 获取ntfy优先级
+   */
+  getNtfyPriority(type) {
+    const priorities = {
+      accountAnomaly: 'high',
+      quotaWarning: 'default',
+      systemError: 'urgent',
+      securityAlert: 'urgent',
+      rateLimitRecovery: 'default',
+      test: 'low'
+    }
+
+    return priorities[type] || 'default'
+  }
+
+  /**
+   * 获取ntfy标签
+   */
+  getNtfyTags(type) {
+    const tags = {
+      accountAnomaly: 'warning',
+      quotaWarning: 'chart_with_downwards_trend',
+      systemError: 'x',
+      securityAlert: 'lock',
+      rateLimitRecovery: 'tada',
+      test: 'test_tube'
+    }
+
+    return tags[type] || 'bell'
+  }
+
+  /**
+   * 规范化ntfy标签
+   */
+  normalizeNtfyTags(tags) {
+    if (Array.isArray(tags)) {
+      return tags
+        .map((tag) => String(tag).trim())
+        .filter(Boolean)
+        .join(',')
+    }
+    return String(tags || '')
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+      .join(',')
   }
 
   /**
